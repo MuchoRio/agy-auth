@@ -10,20 +10,30 @@ This page covers behavior beyond the [README](../README.md): storage, quota view
 - Stored accounts live under `~/.config/agy-auth/`; use `agy-auth path` to print the exact locations.
 
 ```
-~/.config/agy-auth/
+~/.config/agy-auth/   (or ~/Library/Application Support/agy-auth/ on macOS)
   encryption.key
   registry.json
   accounts/<account-id>.json
+  desktop/<account-id>/
+    Cookies
+    Cookies-wal
+    Cookies-shm
+    Local Storage/leveldb/...
+    app_storage.json
+    Preferences
   backups/active-<timestamp>.json
   backups/registry-<timestamp>.json
+  backups/desktop/desktop-<timestamp>/
   update-check.json
 ```
 
-`accounts/*.json` and `backups/active-*.json` are encrypted with AES-256-GCM (`agy-auth-encrypted:v1:`). `encryption.key` is the separate 32-byte key file (`0600`, directory `0700`). Back up `encryption.key` separately; losing it makes the snapshots unrecoverable. Registry backups contain metadata only and remain plaintext.
+`accounts/*.json`, `backups/active-*.json`, `desktop/<account-id>/*`, and `backups/desktop/desktop-*/*` are encrypted with AES-256-GCM (`agy-auth-encrypted:v1:`). `encryption.key` is the separate 32-byte key stored in the OS keyring (`agy-auth` / `snapshot-key`) with a file fallback (`0600`, directory `0700`). Back up `encryption.key` separately; if encrypted files already exist on disk and the key cannot be loaded, `agy-auth` refuses to generate a new random key so existing encrypted snapshots are never silently orphaned. Registry backups contain metadata only and remain plaintext.
 
-Before replacing or deleting the live credential, `agy-auth` snapshots the current value under `backups/` (`0600`, keep 5). `registry.json` is backed up when its contents change. `clean` prunes managed backups beyond retention and snapshots not referenced by the registry; if `registry.json` is missing, snapshots are preserved for rebuild.
+Before replacing or deleting the live credential or Desktop profile, `agy-auth` snapshots the current value under `backups/` (`0600`, keep 5 of each: `active-*`, `registry-*`, and `desktop/desktop-*`). `registry.json` is backed up when its contents change. `clean` prunes managed CLI and Desktop backups beyond retention and snapshots not referenced by the registry; if `registry.json` is missing, snapshots are preserved for rebuild.
 
-`switch` writes the selected snapshot to both the OS keyring and the file fallback, then updates the registry. By default, `switch` also swaps the Antigravity Desktop profile in `~/.config/Antigravity/` (`--target=all`). Pass `--target=cli` or `--target=desktop` to restrict switching to one environment. Use `--relaunch` to gracefully restart running Desktop processes during switch. `agy` refreshes expired access tokens itself with the stored refresh token. Restart `agy` after switching; running sessions keep the old credential.
+`add` captures the live CLI credential and, when `--target=all` or `--target=desktop` is active, snapshots the Antigravity Desktop profile—provided Antigravity Desktop is not currently running (to avoid SQLite WAL / LevelDB lock corruption) and the email recorded in Desktop's `app_storage.json` does not conflict with the CLI credential email.
+
+`switch` writes the selected snapshot to both the OS keyring and the file fallback, then updates the registry. By default, `switch` also syncs the outgoing account's live Desktop profile and atomically swaps the incoming Antigravity Desktop profile into `~/.config/Antigravity/` (or `~/Library/Application Support/Antigravity/` on macOS) with automatic rollback on failure (`--target=all`). Pass `--target=cli` or `--target=desktop` to restrict switching to one environment. Use `--relaunch` to gracefully terminate and restart running Desktop processes during switch, or `--close-desktop` to close Desktop without relaunching. Process discovery inspects exact executable paths (`/proc` on Linux, `ps -axo pid=,args=` on macOS/BSD, `tasklist` on Windows) and never kills unrelated processes or Electron `--type=` helpers. `agy` refreshes expired access tokens itself with the stored refresh token. Restart `agy` after switching; running sessions keep the old credential.
 
 `rotate` inspects 5-hour quota across all stored accounts and automatically switches to the healthiest candidate with remaining quota when the active account is exhausted. If the active account is healthy, it reports the remaining quota and exits 0; pass `--force` to rotate unconditionally. It supports `--target=all|cli|desktop`, `--relaunch`, and `--close-desktop`.
 

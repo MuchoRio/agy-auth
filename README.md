@@ -1,25 +1,44 @@
 # agy-auth
 
-[![npm](https://img.shields.io/npm/v/@fikrilal/agy-auth?label=npm)](https://www.npmjs.com/package/@fikrilal/agy-auth)
-[![CI](https://github.com/fikrilal/agy-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/fikrilal/agy-auth/actions/workflows/ci.yml)
-[![license](https://img.shields.io/github/license/fikrilal/agy-auth)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/MuchoRio/agy-auth?label=release)](https://github.com/MuchoRio/agy-auth/releases)
+[![CI](https://github.com/MuchoRio/agy-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/MuchoRio/agy-auth/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/MuchoRio/agy-auth)](LICENSE)
 
-`agy-auth` is an unofficial multi-account switcher for [Google Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`). Keep personal, work, and test accounts side by side, switch the live credential, and see plan and quota limits without signing in again.
+`agy-auth` is a hardened multi-account switcher for [Google Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`) and **Antigravity Desktop**. Keep personal, work, and test accounts side by side, switch both CLI credentials and Desktop sessions atomically, and monitor plan and quota limits without signing in again.
 
 ![Interactive Account Switcher](assets/demo-switch.png)
 
 ## Highlights
 
-- Switch accounts by row number, alias, email, or account ID.
+- Switch accounts by row number, alias, email, or account ID across both CLI and Antigravity Desktop (`--target=all|cli|desktop`).
 - See plan, 5-hour, weekly, group, and reset columns in `list` and `switch`.
 - Automatically rotate to accounts with remaining 5-hour quota with `agy-auth rotate`.
 - Compare Antigravity quota groups with `agy-auth usage` and `usage --all`.
 - Use live views with automatic switching away from exhausted groups.
-- Keep encrypted account snapshots and automatic backups.
+- Keep AES-256-GCM encrypted CLI & Desktop snapshots, atomic directory swaps with rollback, and automatic backups.
+- Prevent accidental key orphaning, cross-account Desktop profile contamination, and unsafe `pgrep -f` process kills.
 
 ## Install
 
-npm is the recommended install:
+### Option 1: Prebuilt binary from GitHub Releases (Recommended for `MuchoRio/agy-auth`)
+
+Download the prebuilt binary for your platform directly from [GitHub Releases](https://github.com/MuchoRio/agy-auth/releases) (no local Go compiler or Node required):
+
+```shell
+# macOS (Apple Silicon / arm64)
+mkdir -p ~/.local/bin
+gh release download v0.3.1 --repo MuchoRio/agy-auth --pattern "agy-auth-darwin-arm64" -O ~/.local/bin/agy-auth --clobber
+chmod +x ~/.local/bin/agy-auth
+xattr -d com.apple.quarantine ~/.local/bin/agy-auth 2>/dev/null || true
+agy-auth version
+```
+
+Other platform asset names:
+- macOS Intel: `agy-auth-darwin-x64`
+- Linux x64 / arm64: `agy-auth-linux-x64`, `agy-auth-linux-arm64`
+- Windows x64 / arm64: `agy-auth-win32-x64.exe`, `agy-auth-win32-arm64.exe`
+
+### Option 2: npm package
 
 ```shell
 npm install -g @fikrilal/agy-auth
@@ -32,7 +51,18 @@ Run it without a global install:
 npx @fikrilal/agy-auth list
 ```
 
-> The unscoped npm name `agy-auth` is an unrelated project. Install `@fikrilal/agy-auth`; it provides the `agy-auth` command.
+> The unscoped npm name `agy-auth` is an unrelated project.
+
+### Uninstall
+
+```shell
+# Remove binary only (keeps stored accounts and backups)
+rm -f ~/.local/bin/agy-auth /opt/homebrew/bin/agy-auth
+
+# Full clean uninstall (also removes stored snapshots, backups, and vault key)
+rm -rf "$HOME/Library/Application Support/agy-auth" "$HOME/.config/agy-auth"
+security delete-generic-password -s "agy-auth" -a "snapshot-key" 2>/dev/null || true
+```
 
 ## Quick start
 
@@ -63,8 +93,8 @@ After switching, restart `agy`; a running session keeps the old credential in me
 | `agy-auth list [--active] [--no-sync] [--no-usage] [--live]` | List accounts, plan, and quota |
 | `agy-auth add [--alias <alias>] [--target all\|cli\|desktop]` | Save the account signed in to agy or Desktop |
 | `agy-auth login [--alias <alias>] [--no-browser] [--via-agy]` | Add an account through Google OAuth |
-| `agy-auth switch [<query>\|-] [--live] [--target all\|cli\|desktop] [--relaunch]` | Switch interactively, by query, or to the previous account |
-| `agy-auth rotate [--target all\|cli\|desktop] [--relaunch] [--force]` | Automatically switch to an account with remaining quota |
+| `agy-auth switch [<query>\|-] [--live] [--target all\|cli\|desktop] [--relaunch] [--close-desktop]` | Switch interactively, by query, or to the previous account |
+| `agy-auth rotate [--target all\|cli\|desktop] [--relaunch] [--close-desktop] [--force]` | Automatically switch to an account with remaining quota |
 | `agy-auth remove [<query>...] [--all] [--logout] [--yes] [--live]` | Remove stored accounts |
 | `agy-auth alias set <query> <alias>` | Set an alias |
 | `agy-auth alias clear <query>` | Clear an alias |
@@ -116,9 +146,9 @@ to check immediately. Disable automatic checks with `AGY_AUTH_NO_UPDATE_CHECK=1`
 
 ## Storage and safety
 
-`agy-auth` uses the same credential storage as `agy` (OS keyring with a file fallback). Account snapshots and active-credential backups are encrypted with AES-256-GCM. `agy-auth path` prints the storage locations.
+`agy-auth` uses the same credential storage as `agy` (OS keyring with a file fallback). CLI account snapshots, active-credential backups, and Antigravity Desktop session snapshots/backups (`Cookies`, `Cookies-wal`, `Cookies-shm`, `Local Storage`, `app_storage.json`, `Preferences`) are encrypted at rest with AES-256-GCM. Directory swaps use atomic staging and automatic rollback on failure. `agy-auth path` prints the storage locations.
 
-> Back up `~/.config/agy-auth/encryption.key` separately. Without it, encrypted snapshots cannot be recovered. Exported credentials are plaintext; delete them after use.
+> Back up `~/.config/agy-auth/encryption.key` (or `~/Library/Application Support/agy-auth/encryption.key` on macOS) separately. If encrypted snapshots already exist on disk and the key is missing, `agy-auth` refuses to generate a replacement key so existing encrypted accounts are never silently orphaned. Exported credentials are plaintext; delete them after use.
 
 See [Security](SECURITY.md) and the [user guide](docs/user-guide.md#storage-and-switching) for the trust model and recovery details.
 

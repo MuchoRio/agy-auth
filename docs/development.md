@@ -9,11 +9,13 @@ This page is for building `agy-auth` from source and working on the repository. 
 - Antigravity CLI installed for manual testing
 
 ```shell
-git clone https://github.com/fikrilal/agy-auth.git
+git clone https://github.com/MuchoRio/agy-auth.git
 cd agy-auth
 make verify
 make build
 ```
+
+> **Enterprise macOS EDR note (CrowdStrike Falcon):** Some corporate CrowdStrike Custom IOA rules kill any process whose command-line arguments contain the substring `scanner` (`SIGKILL` / exit `137`), which terminates Go's compiler (`darwin_arm64/compile`) when compiling standard library files named `scanner.go` (`encoding/json/scanner.go`, `go/scanner/scanner.go`). On affected endpoints, run verification and binary builds via the GitHub Actions `ci` / `release` workflows (`gh workflow run release.yml --repo MuchoRio/agy-auth --ref main`) and download the prebuilt `agy-auth-darwin-arm64` asset from GitHub Releases.
 
 ## Install from source
 

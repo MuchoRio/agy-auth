@@ -6,13 +6,14 @@ The test strategy is simple: behavior is tested at the lowest layer that proves 
 
 | Layer | Location | What it proves |
 |---|---|---|
-| Credential parsing | `internal/agy/token_test.go` | JSON shape, JWT claims, expiry, fingerprints |
+| Credential parsing | `internal/agy/token_test.go` | JSON shape, unknown-field preservation (`Extra`), JWT claims, expiry, fingerprints |
 | Storage | `internal/agy/storage_test.go` | file backend, permissions, atomic writes, corrupt input |
-| Registry | `internal/registry/registry_test.go` | upsert, dedupe, aliases, queries, permissions |
+| Registry | `internal/registry/registry_test.go` | upsert, `HasCli`/`HasDesktop` preservation, dedupe, aliases, queries, permissions |
+| Desktop | `internal/desktop/desktop_test.go` | AES-256-GCM encrypted snapshot/restore, `Cookies-wal`/`Cookies-shm` and stale WAL cleanup, safe `ps`/`tasklist` executable matching |
 | OAuth | `internal/oauth/oauth_test.go` | PKCE, auth URL, code normalization, token exchange, refresh, discovery |
 | Usage | `internal/usage/usage_test.go` | request shape, project/User-Agent, token refresh, grouped summary, full/detail parsing, cache/stale fallback |
-| CLI behavior | `internal/cli/cli_test.go` | lifecycle, help parity, JSON output, usage columns, `usage --all` groups, live interval, model-aware auto-switch |
-| Encryption/migrations | `internal/agy/snapshot_test.go`, `internal/registry/registry_test.go`, `internal/backup/backup_test.go` | ciphertext round-trip, key permissions, plaintext migration, v1→v2 registry upgrade, encrypted backups |
+| CLI behavior | `internal/cli/cli_test.go` | lifecycle, Desktop running/email-mismatch guards, `import --purge` desktop preservation, help parity, JSON output, usage columns, `usage --all` groups, live interval, model-aware auto-switch |
+| Encryption/migrations | `internal/agy/snapshot_test.go`, `internal/registry/registry_test.go`, `internal/backup/backup_test.go` | ciphertext round-trip, key-orphaning protection, stale-lock recovery, key permissions, plaintext migration, v1→v2 registry upgrade, encrypted CLI & Desktop backup pruning |
 | Contracts | `harness/fixtures` + `harness contracts` | independent credential/registry shapes |
 | Keyring | `TestKeyringRoundTrip` (opt-in) | real Secret Service round-trip with a throwaway service |
 | TUI/PTY | `internal/cli/{keys,pty}_test.go` | key decoding, type-ahead, incremental paint, live PTY open/navigate/quit |

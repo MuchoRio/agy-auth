@@ -85,3 +85,4 @@ Revert the commit; encrypted desktop snapshots and v2 registries remain backward
 - Commit/tag: `fix(security): harden vault key, desktop snapshots, registry locking, and harness lint`
 - Verification result: `gofmt -l .` clean; full CI verification runs via GitHub Actions
 - Residual risk: none
+

@@ -49,11 +49,12 @@ agy credential (OS keyring or file)
 keyring + file mirror -> restart agy
 ```
 
-- Keyring item: service `gemini`, account `antigravity`.
-- File fallback: `~/.gemini/antigravity-cli/antigravity-oauth-token`.
-- `internal/agy/storage.go` is the only place that talks to the keyring.
-- Credential and registry writes use the atomic temp-file + rename helper with `0600`/`0700` permissions.
-- `internal/agy` and `internal/registry` snapshot the previous value before changing it; `internal/backup` owns timestamped names, retention, and pruning.
+- Keyring item: service `gemini`, account `antigravity` (and `agy-auth` / `snapshot-key` for the AES-256-GCM vault key).
+- File fallback: `~/.gemini/antigravity-cli/antigravity-oauth-token` ( preserving unknown JSON fields via `Extra` round-tripping).
+- `internal/agy/storage.go` is the only place that talks to the `gemini`/`antigravity` keyring entry; `internal/agy/snapshot.go` manages `SnapshotVault`, refuses to generate a replacement key when encrypted files already exist on disk, and recovers stale `encryption.key.lock` directories (`>10s`).
+- Credential, registry, export, and update-cache writes use atomic temp-file + rename helpers with `0600`/`0700` permissions; registry mutations are serialized via `.registry.lock`.
+- `internal/desktop` snapshots and restores `Cookies`, `Cookies-wal`, `Cookies-shm`, `Local Storage`, `app_storage.json`, and `Preferences` encrypted at rest via `backup.Codec`, using atomic staging directories (`os.MkdirTemp`) and automatic rollback (`swapDirAtomic`).
+- `internal/agy`, `internal/registry`, and `internal/desktop` snapshot the previous value before changing it; `internal/backup` owns timestamped names, retention (5 of each), and pruning (`PruneAll` includes `PruneDesktop`).
 - Account identity is the Google `sub` claim; the refresh-token fingerprint is the fallback.
 
 See [Internals](../internals.md) for the full document shapes, registry schema, switching rules, and OAuth discovery.
