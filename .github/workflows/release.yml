@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -24,7 +25,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Check tag matches package version
         run: |
-          node -e 'const p=require("./package.json"); const t=process.env.GITHUB_REF_NAME.replace(/^v/,""); if (p.version !== t) { console.error(`package.json version ${p.version} does not match tag ${t}`); process.exit(1); }'
+          node -e 'const p=require("./package.json"); const ref=process.env.GITHUB_REF_NAME||""; if (ref.startsWith("v")) { const t=ref.replace(/^v/,""); if (p.version !== t) { console.error(`package.json version ${p.version} does not match tag ${t}`); process.exit(1); } }'
       - name: Canonical harness verification
         run: go run ./cmd/harness verify --profile ci
       - name: Publish to npm
@@ -39,4 +40,6 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" npm/vendor/* --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          TAG="v$(node -p 'require("./package.json").version')"
+          gh release view "$TAG" >/dev/null 2>&1 && gh release upload "$TAG" npm/vendor/* --clobber || gh release create "$TAG" npm/vendor/* --title "$TAG" --generate-notes

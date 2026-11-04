@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+### Fixed
+
+- Prevented `SnapshotVault` from generating a new random `encryption.key` when encrypted snapshots or active backups already exist on disk, and added stale-lock (`>10s`) recovery for `encryption.key.lock`.
+- Replaced `pgrep -f antigravity` process fallback with exact executable matching (`ps -axo pid=,args=` on macOS/BSD and `tasklist`/`taskkill` on Windows), ignoring `os.Getpid()` and Electron `--type=` helpers.
+- Encrypted Antigravity Desktop snapshots and backups at rest with AES-256-GCM via `SnapshotVault`, included `Cookies-wal` and `Cookies-shm`, cleaned stale companion files on restore, and made directory swaps atomic with automatic rollback.
+- Guarded `agy-auth add` against capturing Desktop profiles while Antigravity Desktop is running or when `app_storage.json` email mismatches the CLI credential, and synced outgoing Desktop profiles before switching.
+- Preserved `HasCli` and `HasDesktop` across `Store.Upsert`, `AccountFromRaw`, and `import --purge`, preserved unknown JSON fields on `TokenFile`/`Token`, and added `.registry.lock` concurrency protection.
+- Expanded `internal/harness/lint` AST checks (`output-boundary`, `atomic-writes`, `file-permissions`) across `internal/desktop`, `internal/backup`, `internal/usage`, and `internal/cli`.
+
 ## [0.3.0] - 2026-10-25
 
 ### Added
@@ -85,6 +96,7 @@ All notable changes to this project are documented here.
 - npm distribution with prebuilt Linux, macOS, and Windows binaries for x64 and arm64.
 - GitHub Actions CI and release workflows.
 
+[0.3.1]: https://github.com/MuchoRio/agy-auth/releases/tag/v0.3.1
 [0.3.0]: https://github.com/fikrilal/agy-auth/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fikrilal/agy-auth/releases/tag/v0.2.0
 [0.1.0]: https://github.com/fikrilal/agy-auth/releases/tag/v0.1.0
