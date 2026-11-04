@@ -9,7 +9,10 @@ This page is for building `agy-auth` from source and working on the repository. 
 - Antigravity CLI installed for manual testing
 
 ```shell
-git clone https://github.com/MuchoRio/agy-auth.git
+# Upstream repository by @fikrilal:
+git clone https://github.com/fikrilal/agy-auth.git
+# Or this hardened fork:
+# git clone https://github.com/MuchoRio/agy-auth.git
 cd agy-auth
 make verify
 make build

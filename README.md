@@ -1,10 +1,11 @@
 # agy-auth
 
-[![Release](https://img.shields.io/github/v/release/MuchoRio/agy-auth?label=release)](https://github.com/MuchoRio/agy-auth/releases)
+[![npm](https://img.shields.io/npm/v/@fikrilal/agy-auth?label=npm)](https://www.npmjs.com/package/@fikrilal/agy-auth)
+[![Release](https://img.shields.io/github/v/release/MuchoRio/agy-auth?label=fork%20release)](https://github.com/MuchoRio/agy-auth/releases)
 [![CI](https://github.com/MuchoRio/agy-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/MuchoRio/agy-auth/actions/workflows/ci.yml)
-[![license](https://img.shields.io/github/license/MuchoRio/agy-auth)](LICENSE)
+[![license](https://img.shields.io/github/license/fikrilal/agy-auth)](LICENSE)
 
-`agy-auth` is a hardened multi-account switcher for [Google Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`) and **Antigravity Desktop**. Keep personal, work, and test accounts side by side, switch both CLI credentials and Desktop sessions atomically, and monitor plan and quota limits without signing in again.
+`agy-auth` is an unofficial multi-account switcher for [Google Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`) and **Antigravity Desktop**, originally created by **[Ahmad Fikril (@fikrilal)](https://github.com/fikrilal)** ([`fikrilal/agy-auth`](https://github.com/fikrilal/agy-auth)). Keep personal, work, and test accounts side by side, switch both CLI credentials and Desktop sessions atomically, and monitor plan and quota limits without signing in again.
 
 ![Interactive Account Switcher](assets/demo-switch.png)
 
@@ -166,6 +167,11 @@ See [Security](SECURITY.md) and the [user guide](docs/user-guide.md#storage-and-
 - [Contributing](CONTRIBUTING.md) and [Development](docs/development.md) — building and testing
 - [Release process](docs/release.md) and [Changelog](CHANGELOG.md)
 - [Documentation index](docs/README.md)
+
+## Credits & Acknowledgments
+
+- **Original Author & Creator:** [Ahmad Fikril (`@fikrilal`)](https://github.com/fikrilal) — creator of the upstream [`fikrilal/agy-auth`](https://github.com/fikrilal/agy-auth) project and the [`@fikrilal/agy-auth`](https://www.npmjs.com/package/@fikrilal/agy-auth) npm package.
+- **Security & Integrity Hardening (`v0.3.1` fork):** [MuchoRio](https://github.com/MuchoRio) — vault key-orphaning guard, AES-256-GCM Desktop snapshot encryption, atomic directory swaps with rollback, and safe cross-platform process discovery.
 
 ## Disclaimer
 
