@@ -324,10 +324,7 @@ func (a *App) writeUpdateCache(cache updateCache) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(a.Store.Dir, 0o700); err != nil {
-		return
-	}
-	_ = os.WriteFile(filepath.Join(a.Store.Dir, updateCacheFilename), append(raw, '\n'), 0o600)
+	_ = writeFileAtomic(filepath.Join(a.Store.Dir, updateCacheFilename), append(raw, '\n'), 0o600)
 }
 
 func fetchLatestVersion(url string) (string, error) {

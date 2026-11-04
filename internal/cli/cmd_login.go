@@ -85,9 +85,11 @@ func (a *App) loginOAuth(alias, authMethod string, noBrowser bool) int {
 
 	tokenFile := oauth.TokenFromResponse(response, authMethod, a.now())
 	var warnings []string
-	if tokenFile.Token.RefreshToken == "" {
-		if old := a.existingRefreshToken(tokenFile); old != "" {
-			tokenFile.Token.RefreshToken = old
+	if old := a.existingStoredToken(tokenFile); old != nil {
+		tokenFile.Extra = old.Extra
+		tokenFile.Token.Extra = old.Token.Extra
+		if tokenFile.Token.RefreshToken == "" && old.Token.RefreshToken != "" {
+			tokenFile.Token.RefreshToken = old.Token.RefreshToken
 			warnings = append(warnings, "Google did not issue a new refresh token; reused the stored one")
 		}
 	}
@@ -233,14 +235,14 @@ func isolatedAgyEnv(home string) []string {
 	)
 }
 
-func (a *App) existingRefreshToken(tokenFile agy.TokenFile) string {
+func (a *App) existingStoredToken(tokenFile agy.TokenFile) *agy.TokenFile {
 	claims, err := tokenFile.Claims()
 	if err != nil || claims.Subject == "" {
-		return ""
+		return nil
 	}
 	reg, err := a.Store.Load()
 	if err != nil {
-		return ""
+		return nil
 	}
 	for i := range reg.Accounts {
 		if reg.Accounts[i].Subject != claims.Subject {
@@ -248,15 +250,15 @@ func (a *App) existingRefreshToken(tokenFile agy.TokenFile) string {
 		}
 		raw, err := a.Store.LoadToken(reg.Accounts[i].ID)
 		if err != nil {
-			return ""
+			return nil
 		}
 		old, err := agy.ParseTokenFile(raw)
 		if err != nil {
-			return ""
+			return nil
 		}
-		return old.Token.RefreshToken
+		return old
 	}
-	return ""
+	return nil
 }
 
 func (a *App) finishLogin(result registry.UpsertResult, report agy.WriteReport, warnings []string) int {

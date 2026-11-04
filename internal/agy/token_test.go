@@ -133,3 +133,27 @@ func TestPhoneLikeTokensWithoutIDToken(t *testing.T) {
 		t.Error("expected fingerprint from refresh token")
 	}
 }
+
+func TestTokenFilePreservesUnknownFieldsOnMarshal(t *testing.T) {
+	raw := []byte(`{"token":{"access_token":"a","token_type":"Bearer","refresh_token":"r","expiry":"2099-01-01T00:00:00Z","scope":"openid"},"auth_method":"consumer","id_token":"","enterprise_org":"acme"}`)
+	tf, err := ParseTokenFile(raw)
+	if err != nil {
+		t.Fatalf("ParseTokenFile: %v", err)
+	}
+	tf.Token.AccessToken = "a2"
+	marshaled, err := json.Marshal(tf)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var check map[string]any
+	if err := json.Unmarshal(marshaled, &check); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if check["enterprise_org"] != "acme" {
+		t.Errorf("lost top-level unknown field: %+v", check)
+	}
+	tokenMap, _ := check["token"].(map[string]any)
+	if tokenMap["scope"] != "openid" || tokenMap["access_token"] != "a2" {
+		t.Errorf("unexpected token map: %+v", tokenMap)
+	}
+}

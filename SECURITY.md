@@ -13,8 +13,8 @@ Do not open a public issue for token leakage, credential storage flaws, or authe
 ## What is stored
 
 - The active credential is written to the OS keyring (`gemini` / `antigravity`) and the file mirror at `~/.gemini/antigravity-cli/antigravity-oauth-token`.
-- Account snapshots under `~/.config/agy-auth/accounts/` are encrypted with AES-256-GCM. The key is `~/.config/agy-auth/encryption.key` (`0600`); snapshots and the key directory are `0600`/`0700`.
-- Before changing the live credential or registry, timestamped active-credential backups are encrypted under `~/.config/agy-auth/backups/`; registry backups contain metadata only. Files keep the newest 5 of each kind.
+- Account snapshots under `~/.config/agy-auth/accounts/` and Desktop profile snapshots under `~/.config/agy-auth/desktop/` are encrypted with AES-256-GCM. The key is `~/.config/agy-auth/encryption.key` (`0600`); snapshots and the key directory are `0600`/`0700`.
+- Before changing the live credential, Desktop profile, or registry, timestamped active-credential and Desktop backups are encrypted under `~/.config/agy-auth/backups/`; registry backups contain metadata only. Files keep the newest 5 of each kind.
 - `export` deliberately writes plaintext credential JSON. Exported files are secrets.
 - No telemetry. Tokens only go to Google OAuth endpoints, the local `agy` binary, and the Code Assist quota API. The update check sends only the package metadata request to `registry.npmjs.org`; it sends no account or token data.
 

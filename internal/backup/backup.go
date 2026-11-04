@@ -21,7 +21,10 @@ const (
 	Registry Kind = "registry"
 )
 
-var managedPattern = regexp.MustCompile(`^(active|registry)-\d{8}T\d{6}\.\d{9}Z(-\d+)?\.json$`)
+var (
+	managedPattern        = regexp.MustCompile(`^(active|registry)-\d{8}T\d{6}\.\d{9}Z(-\d+)?\.json$`)
+	managedDesktopPattern = regexp.MustCompile(`^desktop-\d{8}T\d{6}\.\d{9}Z(-\d+)?$`)
+)
 
 type Codec interface {
 	Encode([]byte) ([]byte, error)
@@ -172,6 +175,43 @@ func (s *Store) Prune(kind Kind, keep int, dryRun bool) ([]string, error) {
 	return removed, errors.Join(errs...)
 }
 
+func (s *Store) PruneDesktop(keep int, dryRun bool) ([]string, error) {
+	if keep < 1 {
+		keep = Retention
+	}
+	desktopDir := filepath.Join(s.Dir, "desktop")
+	entries, err := os.ReadDir(desktopDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || !managedDesktopPattern.MatchString(entry.Name()) {
+			continue
+		}
+		paths = append(paths, filepath.Join(desktopDir, entry.Name()))
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
+	if len(paths) <= keep {
+		return nil, nil
+	}
+	removed := make([]string, 0, len(paths)-keep)
+	var errs []error
+	for _, path := range paths[keep:] {
+		removed = append(removed, filepath.Join("desktop", filepath.Base(path)))
+		if dryRun {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return removed, errors.Join(errs...)
+}
+
 func (s *Store) PruneAll(keep int, dryRun bool) ([]string, error) {
 	var removed []string
 	var errs []error
@@ -181,6 +221,11 @@ func (s *Store) PruneAll(keep int, dryRun bool) ([]string, error) {
 		if err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if deskNames, err := s.PruneDesktop(keep, dryRun); err != nil {
+		errs = append(errs, err)
+	} else {
+		removed = append(removed, deskNames...)
 	}
 	sort.Strings(removed)
 	return removed, errors.Join(errs...)

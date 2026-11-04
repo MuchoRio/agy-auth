@@ -223,6 +223,14 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 			}
 
 			if stillRunning, _, _ := a.Desktop.IsRunning(); !stillRunning {
+				if reg.Active != "" && reg.Active != account.ID {
+					if prev := reg.FindByID(reg.Active); prev != nil && prev.HasDesktop && desktop.HasProfile(a.Desktop.ConfigDir) {
+						deskEmail := a.Desktop.DetectAccountEmail()
+						if deskEmail == "" || prev.Email == "" || strings.EqualFold(deskEmail, prev.Email) {
+							_ = a.Desktop.Snapshot(a.Store.DesktopProfilePath(prev.ID))
+						}
+					}
+				}
 				if err := a.Desktop.Restore(deskProfile); err != nil {
 					if tgt == "desktop" {
 						return nil, a.failCode("desktop_restore_failed", "Check directory permissions for Antigravity desktop profile.", "could not restore desktop profile: %v", err)
@@ -230,6 +238,7 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 					warnings = append(warnings, fmt.Sprintf("could not restore desktop profile: %v", err))
 				} else {
 					desktopSwitched = true
+					account.HasDesktop = true
 					if opts.Relaunch {
 						if err := a.Desktop.Relaunch(); err != nil {
 							warnings = append(warnings, fmt.Sprintf("could not relaunch Antigravity Desktop: %v", err))
@@ -245,6 +254,9 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 	for i := range reg.Accounts {
 		if reg.Accounts[i].ID == account.ID {
 			reg.Accounts[i].LastUsedAt = now.UTC()
+			if desktopSwitched {
+				reg.Accounts[i].HasDesktop = true
+			}
 		}
 	}
 	if reg.Active != "" && reg.Active != account.ID {

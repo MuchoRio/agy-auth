@@ -205,7 +205,40 @@ func migrateRegistry(reg *Registry) error {
 	return nil
 }
 
+func (s *Store) withLock(fn func() error) error {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return fmt.Errorf("create registry directory: %w", err)
+	}
+	if err := os.Chmod(s.Dir, 0o700); err != nil {
+		return fmt.Errorf("harden registry directory: %w", err)
+	}
+	lockPath := filepath.Join(s.Dir, ".registry.lock")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := os.Mkdir(lockPath, 0o700); err == nil {
+			defer os.Remove(lockPath)
+			return fn()
+		} else if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("lock registry: %w", err)
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 10*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return errors.New("registry is locked by another process")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (s *Store) Save(reg *Registry) error {
+	return s.withLock(func() error {
+		return s.saveUnlocked(reg)
+	})
+}
+
+func (s *Store) saveUnlocked(reg *Registry) error {
 	if err := migrateRegistry(reg); err != nil {
 		return err
 	}
@@ -332,7 +365,9 @@ func (s *Store) DeleteToken(id string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete account %s: %w", id, err)
 	}
-	_ = os.RemoveAll(s.DesktopProfilePath(id))
+	if err := os.RemoveAll(s.DesktopProfilePath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("delete desktop profile %s: %w", id, err)
+	}
 	return nil
 }
 
@@ -446,6 +481,7 @@ func AccountFromRaw(raw []byte) (Account, error) {
 		Subject:     claims.Subject,
 		AuthMethod:  tf.AuthMethod,
 		Fingerprint: fingerprint,
+		HasCli:      true,
 		AddedAt:     now,
 		LastUsedAt:  now,
 	}, nil
@@ -467,69 +503,81 @@ func (s *Store) Upsert(raw []byte, alias string, activate bool) (UpsertResult, e
 		}
 	}
 
-	reg, err := s.Load()
+	var result UpsertResult
+	err = s.withLock(func() error {
+		reg, err := s.Load()
+		if err != nil {
+			return err
+		}
+		previousActive := reg.Active
+
+		index := findAccountIndex(reg, id, claims.Subject, fingerprint)
+		now := time.Now().UTC()
+		created := index < 0
+		if created {
+			reg.Accounts = append(reg.Accounts, Account{
+				ID:         id,
+				AddedAt:    now,
+				LastUsedAt: now,
+			})
+			index = len(reg.Accounts) - 1
+		}
+		account := &reg.Accounts[index]
+
+		if alias != "" {
+			for i := range reg.Accounts {
+				if i == index {
+					continue
+				}
+				if strings.EqualFold(reg.Accounts[i].Alias, alias) {
+					return fmt.Errorf("alias %q is already used by %s", alias, reg.Accounts[i].DisplayName())
+				}
+			}
+			account.Alias = strings.TrimSpace(alias)
+		}
+		if claims.Email != "" {
+			account.Email = claims.Email
+		}
+		if claims.Subject != "" {
+			account.Subject = claims.Subject
+		}
+		if tf.AuthMethod != "" {
+			account.AuthMethod = tf.AuthMethod
+		}
+		if fingerprint != "" {
+			account.Fingerprint = fingerprint
+		}
+		account.HasCli = true
+		if s.HasDesktopProfile(account.ID) {
+			account.HasDesktop = true
+		}
+		account.LastUsedAt = now
+		if account.AddedAt.IsZero() {
+			account.AddedAt = now
+		}
+		if activate || reg.Active == "" {
+			if previousActive != "" && previousActive != account.ID {
+				reg.Previous = previousActive
+			}
+			if reg.Previous == account.ID {
+				reg.Previous = ""
+			}
+			reg.Active = account.ID
+		}
+
+		if err := s.SaveToken(account.ID, raw); err != nil {
+			return err
+		}
+		if err := s.saveUnlocked(reg); err != nil {
+			return err
+		}
+		result = UpsertResult{Account: *account, Created: created}
+		return nil
+	})
 	if err != nil {
 		return UpsertResult{}, err
 	}
-	previousActive := reg.Active
-
-	index := findAccountIndex(reg, id, claims.Subject, fingerprint)
-	now := time.Now().UTC()
-	created := index < 0
-	if created {
-		reg.Accounts = append(reg.Accounts, Account{
-			ID:         id,
-			AddedAt:    now,
-			LastUsedAt: now,
-		})
-		index = len(reg.Accounts) - 1
-	}
-	account := &reg.Accounts[index]
-
-	if alias != "" {
-		for i := range reg.Accounts {
-			if i == index {
-				continue
-			}
-			if strings.EqualFold(reg.Accounts[i].Alias, alias) {
-				return UpsertResult{}, fmt.Errorf("alias %q is already used by %s", alias, reg.Accounts[i].DisplayName())
-			}
-		}
-		account.Alias = strings.TrimSpace(alias)
-	}
-	if claims.Email != "" {
-		account.Email = claims.Email
-	}
-	if claims.Subject != "" {
-		account.Subject = claims.Subject
-	}
-	if tf.AuthMethod != "" {
-		account.AuthMethod = tf.AuthMethod
-	}
-	if fingerprint != "" {
-		account.Fingerprint = fingerprint
-	}
-	account.LastUsedAt = now
-	if account.AddedAt.IsZero() {
-		account.AddedAt = now
-	}
-	if activate || reg.Active == "" {
-		if previousActive != "" && previousActive != account.ID {
-			reg.Previous = previousActive
-		}
-		if reg.Previous == account.ID {
-			reg.Previous = ""
-		}
-		reg.Active = account.ID
-	}
-
-	if err := s.SaveToken(account.ID, raw); err != nil {
-		return UpsertResult{}, err
-	}
-	if err := s.Save(reg); err != nil {
-		return UpsertResult{}, err
-	}
-	return UpsertResult{Account: *account, Created: created}, nil
+	return result, nil
 }
 
 // Match finds the stored account that corresponds to a live credential

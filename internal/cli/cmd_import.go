@@ -228,6 +228,10 @@ func (a *App) purgeRegistry() int {
 				carryAccount(&account, oldAccount)
 			}
 		}
+		account.HasCli = true
+		if a.Store.HasDesktopProfile(account.ID) {
+			account.HasDesktop = true
+		}
 		reg.Accounts = append(reg.Accounts, account)
 		accountCopy := account
 		event.Outcome = outcomeImported
@@ -318,6 +322,12 @@ func carryAccount(account *registry.Account, old registry.Account) {
 	}
 	if !old.LastUsedAt.IsZero() {
 		account.LastUsedAt = old.LastUsedAt
+	}
+	if old.HasDesktop {
+		account.HasDesktop = true
+	}
+	if old.HasCli {
+		account.HasCli = true
 	}
 }
 
@@ -412,19 +422,5 @@ func writeExportFile(path string, raw []byte) error {
 	if _, err := agy.ParseTokenFile(raw); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(raw); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o600); err != nil && !errors.Is(err, os.ErrPermission) {
-		return err
-	}
-	return nil
+	return writeFileAtomic(path, raw, 0o600)
 }

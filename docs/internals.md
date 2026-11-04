@@ -253,12 +253,12 @@ If Google rotates the client:
 The Antigravity Desktop application runs as an Electron environment with separate user data in `~/.config/Antigravity/` (on Linux), `~/Library/Application Support/Antigravity` (on macOS), and `%APPDATA%\Antigravity` (on Windows).
 
 Authentication in the Desktop app is preserved across a whitelist of session files:
-- `Cookies` and `Cookies-journal` (Chromium encrypted SQLite database)
+- `Cookies`, `Cookies-journal`, `Cookies-wal`, and `Cookies-shm` (Chromium encrypted SQLite database and WAL/journal companions)
 - `Local Storage/leveldb/` (Web storage for session identity)
 - `app_storage.json` (Application preferences and last logged-in username)
 - `Preferences` (Chromium browser preferences)
 
-On Linux, Chromium encrypts session cookies with a master key stored in Secret Service (`application: Antigravity`, `schema: chrome_libsecret_os_crypt_password_v2`). Because this key is shared per user profile on the machine, snapshotted profiles in `~/.config/agy-auth/desktop/<account-id>/` decrypt seamlessly when swapped.
+On Linux, Chromium encrypts session cookies with a master key stored in Secret Service (`application: Antigravity`, `schema: chrome_libsecret_os_crypt_password_v2`). Because this key is shared per user profile on the machine, snapshotted profiles in `~/.config/agy-auth/desktop/<account-id>/` decrypt seamlessly when swapped. Additionally, `agy-auth` encrypts all snapshotted and backed-up Desktop profile files at rest with AES-256-GCM using `encryption.key`.
 
 ### Process protection and relaunch
 

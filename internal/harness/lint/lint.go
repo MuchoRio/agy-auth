@@ -177,7 +177,9 @@ func checkOutputBoundary(info *fileInfo) []Finding {
 
 func isOutputGuarded(dir string) bool {
 	return repo.Under(dir, "internal/agy") || repo.Under(dir, "internal/registry") ||
-		repo.Under(dir, "internal/oauth") || repo.Under(dir, "internal/cli")
+		repo.Under(dir, "internal/oauth") || repo.Under(dir, "internal/cli") ||
+		repo.Under(dir, "internal/backup") || repo.Under(dir, "internal/desktop") ||
+		repo.Under(dir, "internal/usage")
 }
 
 func isStandardStream(expr ast.Expr) bool {
@@ -225,7 +227,11 @@ func checkKeyringBoundary(info *fileInfo) []Finding {
 }
 
 func checkAtomicWrites(info *fileInfo) []Finding {
-	if info.isTest || (!repo.Under(info.dir, "internal/agy") && !repo.Under(info.dir, "internal/registry") && !repo.Under(info.dir, "internal/desktop")) {
+	if info.isTest || (!repo.Under(info.dir, "internal/agy") &&
+		!repo.Under(info.dir, "internal/registry") &&
+		!repo.Under(info.dir, "internal/desktop") &&
+		!repo.Under(info.dir, "internal/backup") &&
+		!repo.Under(info.dir, "internal/cli")) {
 		return nil
 	}
 	allowed := functionRanges(info.file, "writeFileAtomic")
@@ -386,7 +392,10 @@ func checkNoOSExit(info *fileInfo) []Finding {
 }
 
 func checkPermissions(info *fileInfo) []Finding {
-	if !repo.Under(info.dir, "internal/agy") && !repo.Under(info.dir, "internal/registry") {
+	if info.isTest || (!repo.Under(info.dir, "internal/agy") &&
+		!repo.Under(info.dir, "internal/registry") &&
+		!repo.Under(info.dir, "internal/backup") &&
+		!repo.Under(info.dir, "internal/desktop")) {
 		return nil
 	}
 	var findings []Finding

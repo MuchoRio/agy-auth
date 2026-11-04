@@ -2,9 +2,11 @@ package agy
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSnapshotVaultRoundTrip(t *testing.T) {
@@ -72,5 +74,48 @@ func TestSnapshotVaultPlaintextAndMissingKey(t *testing.T) {
 	corrupt := append([]byte(snapshotPrefix), []byte("not-base64")...)
 	if _, err := vault.Decode(corrupt); err == nil {
 		t.Fatal("corrupt ciphertext succeeded")
+	}
+}
+
+func TestSnapshotVaultRefusesKeyRegenerationWhenEncryptedDataExists(t *testing.T) {
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "encryption.key")
+	vault := NewSnapshotVault(keyPath)
+	encoded, err := vault.Encode([]byte(`{"token":{"refresh_token":"r1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountsDir := filepath.Join(root, "accounts")
+	if err := os.MkdirAll(accountsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(accountsDir, "acct_1234567890.json"), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Encode([]byte(`{"token":{"refresh_token":"r2"}}`)); !errors.Is(err, ErrSnapshotKey) {
+		t.Fatalf("expected ErrSnapshotKey when encrypted snapshots already exist, got %v", err)
+	}
+	if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected key file to remain absent, stat err = %v", err)
+	}
+}
+
+func TestSnapshotVaultRecoversStaleLock(t *testing.T) {
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "encryption.key")
+	lockPath := keyPath + ".lock"
+	if err := os.MkdirAll(lockPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-20 * time.Second)
+	if err := os.Chtimes(lockPath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	vault := NewSnapshotVault(keyPath)
+	if _, err := vault.Encode([]byte(`{"token":{"refresh_token":"r1"}}`)); err != nil {
+		t.Fatalf("expected stale lock recovery to succeed, got %v", err)
 	}
 }

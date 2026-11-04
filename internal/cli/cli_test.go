@@ -87,6 +87,7 @@ func (e *testEnv) app(input string) (*App, *bytes.Buffer, *bytes.Buffer) {
 	errOut := &bytes.Buffer{}
 	store := registry.NewStore(e.storeDir)
 	deskMgr := desktop.NewManager(filepath.Join(e.dir, "desktop_config"), "/bin/echo", store.Backups.Dir)
+	deskMgr.SetCodec(store.Vault)
 	deskMgr.Ops = &desktop.ProcessOps{
 		FindProcesses: func() ([]int, error) {
 			return nil, nil
@@ -2968,8 +2969,73 @@ func TestAddCapturesDesktopProfile(t *testing.T) {
 		t.Error("account HasDesktop should be true")
 	}
 	savedCookies, err := os.ReadFile(filepath.Join(app.Store.DesktopProfilePath(acct.ID), "Cookies"))
-	if err != nil || string(savedCookies) != "active-live-cookies" {
-		t.Fatalf("saved desktop profile cookies incorrect: %v, %s", err, string(savedCookies))
+	if err != nil {
+		t.Fatalf("read saved desktop profile cookies: %v", err)
+	}
+	if !app.Store.Vault.IsEncrypted(savedCookies) {
+		t.Fatalf("expected saved desktop cookies to be encrypted, got %s", string(savedCookies))
+	}
+	decodedCookies, err := app.Store.Vault.Decode(savedCookies)
+	if err != nil || string(decodedCookies) != "active-live-cookies" {
+		t.Fatalf("saved desktop profile cookies incorrect: %v, %s", err, string(decodedCookies))
+	}
+}
+
+func TestAddDesktopRunningOrMismatchedEmail(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if err := os.MkdirAll(app.Desktop.ConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app.Desktop.ConfigDir, "Cookies"), []byte("live-cookies"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app.Desktop.Ops.FindProcesses = func() ([]int, error) {
+		return []int{4321}, nil
+	}
+	if code := app.Run([]string{"add", "--target=desktop"}); code == 0 {
+		t.Fatal("expected add --target=desktop to fail when desktop is running")
+	}
+
+	// Mismatched email in app_storage.json
+	app, _, errOut = env.app("")
+	if err := os.WriteFile(filepath.Join(app.Desktop.ConfigDir, "app_storage.json"), []byte(`{"lastLoginUsername":"other@example.com"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := app.Run([]string{"add", "--target=desktop"}); code == 0 {
+		t.Fatal("expected add --target=desktop to fail when desktop email mismatches CLI account")
+	}
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"add", "--alias", "personal"}); code != 0 {
+		t.Fatalf("add --target=all should still succeed for CLI with warning, got %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "other@example.com") {
+		t.Errorf("expected mismatch warning on stderr, got %q", errOut.String())
+	}
+}
+
+func TestImportPurgePreservesDesktopFlag(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if err := os.MkdirAll(app.Desktop.ConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app.Desktop.ConfigDir, "Cookies"), []byte("desk-cookies"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := app.Run([]string{"add", "--alias", "first"}); code != 0 {
+		t.Fatalf("add exit = %d, stderr = %s", code, errOut)
+	}
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"import", "--purge"}); code != 0 {
+		t.Fatalf("purge exit = %d, stderr = %s", code, errOut)
+	}
+	reg, err := app.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Accounts) != 1 || !reg.Accounts[0].HasDesktop || !reg.Accounts[0].HasCli {
+		t.Fatalf("expected HasDesktop=true and HasCli=true after purge, got %+v", reg.Accounts)
 	}
 }
 

@@ -266,18 +266,30 @@ func (a *App) cmdAdd(args []string) int {
 	desktopCaptured := false
 	if a.Desktop != nil && (*target == "all" || *target == "desktop") {
 		if desktop.HasProfile(a.Desktop.ConfigDir) {
-			deskDest := a.Store.DesktopProfilePath(result.Account.ID)
-			if err := a.Desktop.Snapshot(deskDest); err == nil {
-				desktopCaptured = true
-				result.Account.HasDesktop = true
-				if reg, err := a.Store.Load(); err == nil {
-					for i := range reg.Accounts {
-						if reg.Accounts[i].ID == result.Account.ID {
-							reg.Accounts[i].HasDesktop = true
-							break
+			if running, pid, _ := a.Desktop.IsRunning(); running {
+				if *target == "desktop" {
+					return a.failCode("desktop_running", "Close Antigravity Desktop before running `agy-auth add --target=desktop`.", "Antigravity Desktop is currently running (PID %d)", pid)
+				}
+				a.warn("Antigravity Desktop is currently running (PID %d); skipped desktop profile capture to prevent database corruption", pid)
+			} else if deskEmail := a.Desktop.DetectAccountEmail(); deskEmail != "" && result.Account.Email != "" && !strings.EqualFold(deskEmail, result.Account.Email) {
+				if *target == "desktop" {
+					return a.failCode("state_conflict", "Sign in to the matching account in Antigravity Desktop first.", "Antigravity Desktop profile belongs to %s, which does not match CLI account %s", deskEmail, result.Account.Email)
+				}
+				a.warn("Antigravity Desktop profile belongs to %s (CLI account is %s); skipped desktop profile capture to prevent cross-account overwrite", deskEmail, result.Account.Email)
+			} else {
+				deskDest := a.Store.DesktopProfilePath(result.Account.ID)
+				if err := a.Desktop.Snapshot(deskDest); err == nil {
+					desktopCaptured = true
+					result.Account.HasDesktop = true
+					if reg, err := a.Store.Load(); err == nil {
+						for i := range reg.Accounts {
+							if reg.Accounts[i].ID == result.Account.ID {
+								reg.Accounts[i].HasDesktop = true
+								break
+							}
 						}
+						_ = a.Store.Save(reg)
 					}
-					_ = a.Store.Save(reg)
 				}
 			}
 		} else if *target == "desktop" {

@@ -57,6 +57,7 @@ func New() (*App, error) {
 		backupDir = store.Backups.Dir
 	}
 	deskMgr := desktop.NewManager("", "", backupDir)
+	deskMgr.SetCodec(store.Vault)
 	usageClient := usage.NewClient(Version)
 	return &App{
 		In:               os.Stdin,

@@ -241,3 +241,28 @@ func TestSnapshotRehardensDirectory(t *testing.T) {
 		t.Errorf("backup dir permissions = %o", info.Mode().Perm())
 	}
 }
+
+func TestPruneAllIncludesDesktopBackups(t *testing.T) {
+	store := newTestStore(t)
+	deskBase := filepath.Join(store.Dir, "desktop")
+	for i := 0; i < Retention+2; i++ {
+		dir := filepath.Join(deskBase, fmt.Sprintf("desktop-20260101T00000%d.000000000Z", i))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := store.PruneAll(Retention, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed = %v, want 2 desktop backups", removed)
+	}
+	entries, err := os.ReadDir(deskBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != Retention {
+		t.Fatalf("remaining desktop backups = %d, want %d", len(entries), Retention)
+	}
+}

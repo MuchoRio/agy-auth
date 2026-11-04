@@ -15,16 +15,115 @@ import (
 // (service "gemini", account "antigravity") and in the file fallback at
 // ~/.gemini/antigravity-cli/antigravity-oauth-token.
 type TokenFile struct {
+	Token      Token                      `json:"token"`
+	AuthMethod string                     `json:"auth_method"`
+	IDToken    string                     `json:"id_token"`
+	Extra      map[string]json.RawMessage `json:"-"`
+}
+
+type Token struct {
+	AccessToken  string                     `json:"access_token"`
+	TokenType    string                     `json:"token_type"`
+	RefreshToken string                     `json:"refresh_token"`
+	Expiry       string                     `json:"expiry"`
+	Extra        map[string]json.RawMessage `json:"-"`
+}
+
+type tokenFileAlias struct {
 	Token      Token  `json:"token"`
 	AuthMethod string `json:"auth_method"`
 	IDToken    string `json:"id_token"`
 }
 
-type Token struct {
+type tokenAlias struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
 	RefreshToken string `json:"refresh_token"`
 	Expiry       string `json:"expiry"`
+}
+
+func (t *TokenFile) UnmarshalJSON(data []byte) error {
+	var base tokenFileAlias
+	if err := json.Unmarshal(data, &base); err != nil {
+		return err
+	}
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawMap); err != nil {
+		return err
+	}
+	delete(rawMap, "token")
+	delete(rawMap, "auth_method")
+	delete(rawMap, "id_token")
+	if len(rawMap) == 0 {
+		rawMap = nil
+	}
+	t.Token = base.Token
+	t.AuthMethod = base.AuthMethod
+	t.IDToken = base.IDToken
+	t.Extra = rawMap
+	return nil
+}
+
+func (t TokenFile) MarshalJSON() ([]byte, error) {
+	if len(t.Extra) == 0 {
+		return json.Marshal(tokenFileAlias{
+			Token:      t.Token,
+			AuthMethod: t.AuthMethod,
+			IDToken:    t.IDToken,
+		})
+	}
+	merged := make(map[string]any, len(t.Extra)+3)
+	for k, v := range t.Extra {
+		merged[k] = v
+	}
+	merged["token"] = t.Token
+	merged["auth_method"] = t.AuthMethod
+	merged["id_token"] = t.IDToken
+	return json.Marshal(merged)
+}
+
+func (t *Token) UnmarshalJSON(data []byte) error {
+	var base tokenAlias
+	if err := json.Unmarshal(data, &base); err != nil {
+		return err
+	}
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawMap); err != nil {
+		return err
+	}
+	delete(rawMap, "access_token")
+	delete(rawMap, "token_type")
+	delete(rawMap, "refresh_token")
+	delete(rawMap, "expiry")
+	if len(rawMap) == 0 {
+		rawMap = nil
+	}
+	t.AccessToken = base.AccessToken
+	t.TokenType = base.TokenType
+	t.RefreshToken = base.RefreshToken
+	t.Expiry = base.Expiry
+	t.Extra = rawMap
+	return nil
+}
+
+func (t Token) MarshalJSON() ([]byte, error) {
+	if len(t.Extra) == 0 {
+		return json.Marshal(tokenAlias{
+			AccessToken:  t.AccessToken,
+			TokenType:    t.TokenType,
+			RefreshToken: t.RefreshToken,
+			Expiry:       t.Expiry,
+		})
+	}
+	merged := make(map[string]any, len(t.Extra)+4)
+	for k, v := range t.Extra {
+		merged[k] = v
+	}
+	merged["access_token"] = t.AccessToken
+	merged["token_type"] = t.TokenType
+	merged["refresh_token"] = t.RefreshToken
+	merged["expiry"] = t.Expiry
+	return json.Marshal(merged)
 }
 
 // Claims is the subset of OIDC claims agy-auth uses. The ID token signature is

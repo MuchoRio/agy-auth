@@ -111,7 +111,11 @@ func (v *SnapshotVault) loadKey(create bool) ([]byte, error) {
 	if !create {
 		return nil, ErrSnapshotKey
 	}
-	if err := os.MkdirAll(filepath.Dir(v.KeyPath), 0o700); err != nil {
+	rootDir := filepath.Dir(v.KeyPath)
+	if hasExistingEncryptedData(rootDir) {
+		return nil, fmt.Errorf("%w: existing encrypted data found; restore encryption.key", ErrSnapshotKey)
+	}
+	if err := os.MkdirAll(rootDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create key directory: %w", err)
 	}
 	lockPath := v.KeyPath + ".lock"
@@ -126,6 +130,9 @@ func (v *SnapshotVault) loadKey(create bool) ([]byte, error) {
 				}
 				return key, nil
 			}
+			if hasExistingEncryptedData(rootDir) {
+				return nil, fmt.Errorf("%w: existing encrypted data found; restore encryption.key", ErrSnapshotKey)
+			}
 			key := make([]byte, snapshotKeyLen)
 			if _, err := rand.Read(key); err != nil {
 				return nil, fmt.Errorf("generate snapshot key: %w", err)
@@ -137,6 +144,10 @@ func (v *SnapshotVault) loadKey(create bool) ([]byte, error) {
 			return key, nil
 		} else if !errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("lock snapshot key: %w", err)
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 10*time.Second {
+			_ = os.Remove(lockPath)
+			continue
 		}
 		if raw, err := os.ReadFile(v.KeyPath); err == nil {
 			key, decodeErr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
@@ -150,4 +161,27 @@ func (v *SnapshotVault) loadKey(create bool) ([]byte, error) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func hasExistingEncryptedData(rootDir string) bool {
+	for _, sub := range []string{"accounts", "backups"} {
+		dir := filepath.Join(rootDir, sub)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			if bytes.HasPrefix(bytes.TrimSpace(raw), []byte(snapshotPrefix)) {
+				return true
+			}
+		}
+	}
+	return false
 }
