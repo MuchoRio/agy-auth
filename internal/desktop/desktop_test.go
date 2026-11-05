@@ -250,8 +250,8 @@ func TestParseWindowsTasklist(t *testing.T) {
 
 func TestUserScopeAndSubjectMatch(t *testing.T) {
 	got := UserScopeForSubject("100988783380501888122")
-	if got != "u18056d72364ee59d" {
-		t.Fatalf("UserScopeForSubject = %q, want u18056d72364ee59d", got)
+	if got != "uc3a0c2427de11f39" {
+		t.Fatalf("UserScopeForSubject = %q, want uc3a0c2427de11f39", got)
 	}
 
 	root := t.TempDir()
@@ -259,8 +259,8 @@ func TestUserScopeAndSubjectMatch(t *testing.T) {
 	if err := mgr.WriteUserScope("100988783380501888122"); err != nil {
 		t.Fatalf("WriteUserScope: %v", err)
 	}
-	if scope := mgr.ReadUserScope(); scope != "u18056d72364ee59d" {
-		t.Fatalf("ReadUserScope = %q, want u18056d72364ee59d", scope)
+	if scope := mgr.ReadUserScope(); scope != "uc3a0c2427de11f39" {
+		t.Fatalf("ReadUserScope = %q, want uc3a0c2427de11f39", scope)
 	}
 	matched, known := mgr.DetectAccountSubjectMatch("100988783380501888122")
 	if !known || !matched {

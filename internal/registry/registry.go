@@ -366,8 +366,8 @@ func (s *Store) DesktopProfilePath(id string) string {
 }
 
 func (s *Store) HasDesktopProfile(id string) bool {
-	entries, err := os.ReadDir(s.DesktopProfilePath(id))
-	return err == nil && len(entries) > 0
+	info, err := os.Stat(s.DesktopProfilePath(id))
+	return err == nil && info.IsDir()
 }
 
 func (s *Store) DeleteToken(id string) error {
