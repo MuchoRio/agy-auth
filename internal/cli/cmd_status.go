@@ -46,10 +46,13 @@ func (a *App) cmdStatus(args []string) int {
 	keyringRaw, fileRaw, keyringErr, fileErr := a.Storage.ReadBoth()
 	mirror := mirrorState(keyringRaw, fileRaw, keyringErr, fileErr)
 	running := runningAgyCount()
+	modelOverride := a.detectCLIModelOverride()
 	var desktopRunning bool
 	var desktopPid int
+	var userScope string
 	if a.Desktop != nil {
 		desktopRunning, desktopPid, _ = a.Desktop.IsRunning()
+		userScope = a.Desktop.ReadUserScope()
 	}
 
 	now := a.now()
@@ -83,6 +86,12 @@ func (a *App) cmdStatus(args []string) int {
 			if desktopRunning {
 				payload["desktop_pid"] = desktopPid
 			}
+			if userScope != "" {
+				payload["user_scope"] = userScope
+			}
+		}
+		if modelOverride != "" {
+			payload["cli_model_override"] = modelOverride
 		}
 		if current != nil {
 			row := map[string]any{
@@ -156,6 +165,12 @@ func (a *App) cmdStatus(args []string) int {
 		default:
 			fmt.Fprintln(a.Out, "Desktop:    not running")
 		}
+		if userScope != "" {
+			fmt.Fprintf(a.Out, "User scope: %s\n", userScope)
+		}
+	}
+	if modelOverride != "" {
+		fmt.Fprintf(a.Out, "CLI model:  %s\n", a.yellow(fmt.Sprintf("%s (pinned in settings.json)", modelOverride)))
 	}
 	fmt.Fprintf(a.Out, "Accounts:   %d stored\n", len(reg.Accounts))
 	return 0

@@ -164,23 +164,36 @@ func (v *SnapshotVault) loadKey(create bool) ([]byte, error) {
 }
 
 func hasExistingEncryptedData(rootDir string) bool {
-	for _, sub := range []string{"accounts", "backups"} {
-		dir := filepath.Join(rootDir, sub)
-		entries, err := os.ReadDir(dir)
+	for _, sub := range []string{"accounts", "backups", "desktop"} {
+		if dirHasEncryptedFile(filepath.Join(rootDir, sub), 3) {
+			return true
+		}
+	}
+	return false
+}
+
+func dirHasEncryptedFile(dir string, maxDepth int) bool {
+	if maxDepth < 0 {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		full := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			if dirHasEncryptedFile(full, maxDepth-1) {
+				return true
+			}
+			continue
+		}
+		raw, err := os.ReadFile(full)
 		if err != nil {
 			continue
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-				continue
-			}
-			raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-			if err != nil {
-				continue
-			}
-			if bytes.HasPrefix(bytes.TrimSpace(raw), []byte(snapshotPrefix)) {
-				return true
-			}
+		if bytes.HasPrefix(bytes.TrimSpace(raw), []byte(snapshotPrefix)) {
+			return true
 		}
 	}
 	return false

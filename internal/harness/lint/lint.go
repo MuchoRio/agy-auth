@@ -395,7 +395,8 @@ func checkPermissions(info *fileInfo) []Finding {
 	if info.isTest || (!repo.Under(info.dir, "internal/agy") &&
 		!repo.Under(info.dir, "internal/registry") &&
 		!repo.Under(info.dir, "internal/backup") &&
-		!repo.Under(info.dir, "internal/desktop")) {
+		!repo.Under(info.dir, "internal/desktop") &&
+		!repo.Under(info.dir, "internal/cli")) {
 		return nil
 	}
 	var findings []Finding
@@ -408,7 +409,7 @@ func checkPermissions(info *fileInfo) []Finding {
 		switch callName(call) {
 		case "os.MkdirAll", "os.Chmod":
 			index = 1
-		case "os.OpenFile", "os.WriteFile":
+		case "os.OpenFile", "os.WriteFile", "writeFileAtomic", "backup.WriteFileAtomic":
 			index = 2
 		default:
 			return true

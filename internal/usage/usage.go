@@ -133,12 +133,13 @@ type FullProvider interface {
 }
 
 type Client struct {
-	Endpoint     string
-	ProjectID    string
-	UserAgent    string
-	HTTPClient   *http.Client
-	Now          func() time.Time
-	RefreshToken func(ctx context.Context, refreshToken string) (string, time.Time, error)
+	Endpoint       string
+	ProjectID      string
+	UserAgent      string
+	HTTPClient     *http.Client
+	Now            func() time.Time
+	RefreshToken   func(ctx context.Context, refreshToken string) (string, time.Time, error)
+	OnTokenRefresh func(token *agy.TokenFile)
 
 	ensureOnce sync.Once
 	ensureErr  error
@@ -279,11 +280,20 @@ func (c *Client) accessToken(ctx context.Context, token *agy.TokenFile) (string,
 	}
 	accessToken := strings.TrimSpace(token.Token.AccessToken)
 	if accessToken == "" || token.Expired(c.now().Add(30*time.Second)) {
-		refreshed, _, err := c.refresh(ctx, token)
+		refreshed, expiry, err := c.refresh(ctx, token)
 		if err != nil {
 			return "", err
 		}
-		accessToken = refreshed
+		accessToken = strings.TrimSpace(refreshed)
+		if accessToken != "" {
+			token.Token.AccessToken = accessToken
+			if !expiry.IsZero() {
+				token.Token.Expiry = expiry.UTC().Format(time.RFC3339Nano)
+			}
+			if c.OnTokenRefresh != nil {
+				c.OnTokenRefresh(token)
+			}
+		}
 	}
 	if accessToken == "" {
 		return "", ErrMissingAuth

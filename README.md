@@ -5,13 +5,15 @@
 [![CI](https://github.com/MuchoRio/agy-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/MuchoRio/agy-auth/actions/workflows/ci.yml)
 [![license](https://img.shields.io/github/license/fikrilal/agy-auth)](LICENSE)
 
-`agy-auth` is an unofficial multi-account switcher for [Google Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`) and **Antigravity Desktop**, originally created by **[Ahmad Fikril (@fikrilal)](https://github.com/fikrilal)** ([`fikrilal/agy-auth`](https://github.com/fikrilal/agy-auth)). Keep personal, work, and test accounts side by side, switch both CLI credentials and Desktop sessions atomically, and monitor plan and quota limits without signing in again.
+`agy-auth` is an unofficial multi-account switcher for [Google Antigravity CLI](https://antigravity.google/docs/cli/overview) (`agy`) and **Antigravity Desktop / Antigravity IDE (2.0)**, originally created by **[Ahmad Fikril (@fikrilal)](https://github.com/fikrilal)** ([`fikrilal/agy-auth`](https://github.com/fikrilal/agy-auth)). Keep personal, work, and test accounts side by side, switch both CLI credentials and Desktop/IDE sessions atomically, synchronize model entitlements (`credential-user-scope`), and monitor plan and quota limits without signing in again.
 
 ![Interactive Account Switcher](assets/demo-switch.png)
 
 ## Highlights
 
-- Switch accounts by row number, alias, email, or account ID across both CLI and Antigravity Desktop (`--target=all|cli|desktop`).
+- Switch accounts by row number, alias, email, or account ID across both CLI and Antigravity Desktop / IDE (`--target=all|cli|desktop`).
+- Synchronize Antigravity 2.0 `credential-user-scope` and safely terminate background `agy --hub` daemons to preserve full model entitlements (e.g. Gemini 4 Argon).
+- Detect and warn when `~/.gemini/antigravity-cli/settings.json` has pinned `"model"` overrides.
 - See plan, 5-hour, weekly, group, and reset columns in `list` and `switch`.
 - Automatically rotate to accounts with remaining 5-hour quota with `agy-auth rotate`.
 - Compare Antigravity quota groups with `agy-auth usage` and `usage --all`.
@@ -28,7 +30,7 @@ Download the prebuilt binary for your platform directly from [GitHub Releases](h
 ```shell
 # macOS (Apple Silicon / arm64)
 mkdir -p ~/.local/bin
-gh release download v0.3.1 --repo MuchoRio/agy-auth --pattern "agy-auth-darwin-arm64" -O ~/.local/bin/agy-auth --clobber
+gh release download v0.3.2 --repo MuchoRio/agy-auth --pattern "agy-auth-darwin-arm64" -O ~/.local/bin/agy-auth --clobber
 chmod +x ~/.local/bin/agy-auth
 xattr -d com.apple.quarantine ~/.local/bin/agy-auth 2>/dev/null || true
 agy-auth version
@@ -171,7 +173,7 @@ See [Security](SECURITY.md) and the [user guide](docs/user-guide.md#storage-and-
 ## Credits & Acknowledgments
 
 - **Original Author & Creator:** [Ahmad Fikril (`@fikrilal`)](https://github.com/fikrilal) — creator of the upstream [`fikrilal/agy-auth`](https://github.com/fikrilal/agy-auth) project and the [`@fikrilal/agy-auth`](https://www.npmjs.com/package/@fikrilal/agy-auth) npm package.
-- **Security & Integrity Hardening (`v0.3.1` fork):** [MuchoRio](https://github.com/MuchoRio) — vault key-orphaning guard, AES-256-GCM Desktop snapshot encryption, atomic directory swaps with rollback, and safe cross-platform process discovery.
+- **Security & Integrity Hardening (`v0.3.1` / `v0.3.2` fork):** [MuchoRio](https://github.com/MuchoRio) — vault key-orphaning guard, AES-256-GCM Desktop snapshot encryption, atomic directory swaps with rollback, safe cross-platform process discovery, and Antigravity 2.0 / IDE `credential-user-scope` & daemon synchronization.
 
 ## Disclaimer
 

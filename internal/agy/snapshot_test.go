@@ -119,3 +119,26 @@ func TestSnapshotVaultRecoversStaleLock(t *testing.T) {
 		t.Fatalf("expected stale lock recovery to succeed, got %v", err)
 	}
 }
+
+func TestSnapshotVaultRefusesKeyRegenerationWhenDesktopEncryptedDataExists(t *testing.T) {
+	root := t.TempDir()
+	keyPath := filepath.Join(root, "encryption.key")
+	vault := NewSnapshotVault(keyPath)
+	encoded, err := vault.Encode([]byte("desktop-cookie-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nestedDir := filepath.Join(root, "desktop", "acct_1234567890", "Local Storage", "leveldb")
+	if err := os.MkdirAll(nestedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedDir, "000001.log"), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vault.Encode([]byte("new-data")); !errors.Is(err, ErrSnapshotKey) {
+		t.Fatalf("expected ErrSnapshotKey when encrypted desktop snapshot exists, got %v", err)
+	}
+}

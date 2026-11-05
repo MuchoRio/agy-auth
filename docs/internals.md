@@ -248,17 +248,26 @@ If Google rotates the client:
 4. Do not commit the values themselves; keep only the hashes.
 5. Verify with `agy-auth login --no-browser` and `go test ./internal/oauth`.
 
-## Antigravity Desktop App support
+## Antigravity Desktop App & IDE support
 
-The Antigravity Desktop application runs as an Electron environment with separate user data in `~/.config/Antigravity/` (on Linux), `~/Library/Application Support/Antigravity` (on macOS), and `%APPDATA%\Antigravity` (on Windows).
+The Antigravity Desktop application runs as an Electron environment with separate user data in `~/.config/Antigravity/` or `~/.config/Antigravity IDE/` (on Linux), `~/Library/Application Support/Antigravity` or `~/Library/Application Support/Antigravity IDE` (on macOS), and `%APPDATA%\Antigravity` (on Windows).
 
-Authentication in the Desktop app is preserved across a whitelist of session files:
+Authentication in the Desktop/IDE app is preserved across a whitelist of session files:
 - `Cookies`, `Cookies-journal`, `Cookies-wal`, and `Cookies-shm` (Chromium encrypted SQLite database and WAL/journal companions)
 - `Local Storage/leveldb/` (Web storage for session identity)
 - `app_storage.json` (Application preferences and last logged-in username)
 - `Preferences` (Chromium browser preferences)
 
 On Linux, Chromium encrypts session cookies with a master key stored in Secret Service (`application: Antigravity`, `schema: chrome_libsecret_os_crypt_password_v2`). Because this key is shared per user profile on the machine, snapshotted profiles in `~/.config/agy-auth/desktop/<account-id>/` decrypt seamlessly when swapped. Additionally, `agy-auth` encrypts all snapshotted and backed-up Desktop profile files at rest with AES-256-GCM using `encryption.key`.
+
+### Antigravity 2.0 user scope & hub daemon
+
+Antigravity 2.0 / IDE couples the active login with a scoped user identifier written to `~/.gemini/antigravity-cli/credential-user-scope` (or `~/Library/Application Support/antigravity/credential-user-scope`). This file contains `"u" + sha256(sub)[:16]`. When this identifier mismatches the active credential or points to an expired account, the IDE restricts model entitlements (e.g. falling back to Gemini 3.8 Flash even when Gemini 4 Argon is selected).
+
+Furthermore, the IDE runs a background `agy --hub` daemon. When switching accounts with `--relaunch` or `--close-desktop`, `agy-auth`:
+1. Atomically writes the correct `credential-user-scope` for the incoming account.
+2. Gracefully terminates running `agy --hub` processes (`TerminateHub`), forcing the IDE to reload fresh credentials and entitlements on next prompt.
+3. Inspects `~/.gemini/antigravity-cli/settings.json` and alerts if a hardcoded `"model"` pins the runtime.
 
 ### Process protection and relaunch
 

@@ -3273,3 +3273,45 @@ func TestRotateDesktopTargetAndRelaunch(t *testing.T) {
 		t.Errorf("output missing relaunch message: %q", out.String())
 	}
 }
+
+func TestSwitchUpdatesUserScopeAndWarnsOnCLIModelOverride(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "first"}); code != 0 {
+		t.Fatalf("add exit = %d, stderr = %s", code, errOut)
+	}
+	addSecondAccount(t, env, "second@example.com", "subject-2", "refresh-2", "second")
+
+	settingsPath := filepath.Join(filepath.Dir(env.tokenPath), "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"model":"Gemini 3.8 Flash (High)","vimMode":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"switch", "second"}); code != 0 {
+		t.Fatalf("switch exit = %d, stderr = %s", code, errOut)
+	}
+	if !strings.Contains(errOut.String(), "Gemini 3.8 Flash (High)") {
+		t.Errorf("expected CLI model override warning on stderr, got %q", errOut.String())
+	}
+	if gotScope := app.Desktop.ReadUserScope(); gotScope != desktop.UserScopeForSubject("subject-2") {
+		t.Errorf("ReadUserScope = %q, want %q", gotScope, desktop.UserScopeForSubject("subject-2"))
+	}
+
+	var out *bytes.Buffer
+	app, out, errOut = env.app("")
+	if code := app.Run([]string{"status", "--json"}); code != 0 {
+		t.Fatalf("status --json exit = %d, stderr = %s", code, errOut)
+	}
+	envl := decodeTestEnvelope(t, out)
+	var statusData map[string]any
+	if err := json.Unmarshal(envl.Data, &statusData); err != nil {
+		t.Fatal(err)
+	}
+	if statusData["cli_model_override"] != "Gemini 3.8 Flash (High)" {
+		t.Errorf("cli_model_override = %v", statusData["cli_model_override"])
+	}
+	if statusData["user_scope"] != desktop.UserScopeForSubject("subject-2") {
+		t.Errorf("user_scope = %v", statusData["user_scope"])
+	}
+}

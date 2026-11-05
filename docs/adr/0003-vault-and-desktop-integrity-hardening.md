@@ -45,3 +45,4 @@ Adopt **Option B**:
 ## Confirmation
 
 - Verified in CI (`harness verify --profile ci`, GitHub Actions run `#41795230069`) and shipped in `v0.3.1`.
+

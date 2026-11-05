@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -378,143 +379,6 @@ func (a *App) maybeAutoSwitch(state *liveState, mode liveMode) string {
 	return action
 }
 
-func autoSwitchCandidate(rows []accountRow) *accountRow {
-	var active *accountRow
-	for i := range rows {
-		if rows[i].Active {
-			active = &rows[i]
-			break
-		}
-	}
-	if active == nil || active.ID == "" || !quotaDataFresh(active) || !quotaExhausted(active) {
-		return nil
-	}
-
-	return selectRotateCandidate(rows, active.ID)
-}
-
-func groupDataUsable(row *accountRow) bool {
-	if row == nil || row.groups == nil || row.groups.Stale {
-		return false
-	}
-	for _, group := range row.groups.Groups {
-		if len(group.Buckets) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func quotaDataFresh(row *accountRow) bool {
-	if row == nil {
-		return false
-	}
-	return groupDataUsable(row) ||
-		(row.Usage != nil && !row.Usage.Stale) ||
-		(row.detail != nil && !row.detail.Stale)
-}
-
-func quotaExhausted(row *accountRow) bool {
-	if row == nil {
-		return false
-	}
-	if groupDataUsable(row) {
-		for _, group := range row.groups.Groups {
-			for _, bucket := range group.Buckets {
-				if bucket.RemainingPercent <= 0 {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	if row.Usage != nil && !row.Usage.Stale {
-		if row.Usage.FiveHour != nil && row.Usage.FiveHour.RemainingPercent <= 0 {
-			return true
-		}
-		if row.Usage.Weekly != nil && row.Usage.Weekly.RemainingPercent <= 0 {
-			return true
-		}
-	}
-	return row.detail != nil && !row.detail.Stale && row.detail.Exhausted()
-}
-
-func quotaAvailable(row *accountRow) bool {
-	if row == nil {
-		return false
-	}
-	if groupDataUsable(row) {
-		hasData := false
-		for _, group := range row.groups.Groups {
-			for _, bucket := range group.Buckets {
-				hasData = true
-				if bucket.RemainingPercent <= 0 {
-					return false
-				}
-			}
-		}
-		return hasData
-	}
-	hasData := false
-	if row.Usage != nil && !row.Usage.Stale {
-		hasData = true
-		if row.Usage.FiveHour != nil && row.Usage.FiveHour.RemainingPercent <= 0 {
-			return false
-		}
-		if row.Usage.Weekly != nil && row.Usage.Weekly.RemainingPercent <= 0 {
-			return false
-		}
-	}
-	if row.detail != nil && !row.detail.Stale {
-		hasData = true
-		if row.detail.Exhausted() {
-			return false
-		}
-	}
-	return hasData
-}
-
-func quotaNextReset(row *accountRow) time.Time {
-	if row == nil {
-		return time.Time{}
-	}
-	var next time.Time
-	if groupDataUsable(row) {
-		for _, group := range row.groups.Groups {
-			for _, bucket := range group.Buckets {
-				reset, ok := bucket.ResetAt()
-				if !ok {
-					continue
-				}
-				if next.IsZero() || reset.Before(next) {
-					next = reset
-				}
-			}
-		}
-		if !next.IsZero() {
-			return next
-		}
-	}
-	if row.Usage != nil && !row.Usage.Stale {
-		for _, window := range []*usage.Window{row.Usage.FiveHour, row.Usage.Weekly} {
-			if window == nil || window.ResetsAt == nil {
-				continue
-			}
-			if next.IsZero() || window.ResetsAt.Before(next) {
-				next = *window.ResetsAt
-			}
-		}
-	}
-	if row.detail != nil && !row.detail.Stale {
-		if lowest := row.detail.Lowest(); lowest != nil && lowest.ResetsAt != nil {
-			if next.IsZero() || lowest.ResetsAt.Before(next) {
-				next = *lowest.ResetsAt
-			}
-		}
-	}
-	return next
-}
-
 func (a *App) runLive(mode liveMode, logout bool) int {
 	command := mode.command()
 	if a.JSON {
@@ -695,6 +559,12 @@ func (a *App) liveChild() *App {
 func (a *App) liveSwitch(id, label string) string {
 	child := a.liveChild()
 	if code := child.Run([]string{"switch", id, "--json"}); code != 0 {
+		if outBuf, ok := child.Out.(*bytes.Buffer); ok {
+			var env Envelope
+			if err := json.Unmarshal(outBuf.Bytes(), &env); err == nil && env.Error != nil && env.Error.Message != "" {
+				return "Switch failed: " + env.Error.Message
+			}
+		}
 		return "Switch failed."
 	}
 	return fmt.Sprintf("Switched to %s.", label)

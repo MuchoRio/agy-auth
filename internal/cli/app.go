@@ -12,12 +12,13 @@ import (
 
 	"github.com/fikrilal/agy-auth/internal/agy"
 	"github.com/fikrilal/agy-auth/internal/desktop"
+	"github.com/fikrilal/agy-auth/internal/oauth"
 	"github.com/fikrilal/agy-auth/internal/registry"
 	"github.com/fikrilal/agy-auth/internal/usage"
 	"golang.org/x/term"
 )
 
-var Version = "0.3.1"
+var Version = "0.3.2"
 
 type App struct {
 	In               io.Reader
@@ -59,6 +60,22 @@ func New() (*App, error) {
 	deskMgr := desktop.NewManager("", "", backupDir)
 	deskMgr.SetCodec(store.Vault)
 	usageClient := usage.NewClient(Version)
+	usageClient.OnTokenRefresh = func(token *agy.TokenFile) {
+		if token == nil {
+			return
+		}
+		raw, err := oauth.MarshalTokenFile(*token)
+		if err != nil {
+			return
+		}
+		reg, err := store.Load()
+		if err != nil {
+			return
+		}
+		if matched, err := reg.Match(raw); err == nil && matched != nil {
+			_ = store.SaveToken(matched.ID, raw)
+		}
+	}
 	return &App{
 		In:               os.Stdin,
 		Out:              os.Stdout,

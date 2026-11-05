@@ -247,3 +247,41 @@ func TestParseWindowsTasklist(t *testing.T) {
 		t.Fatalf("parseWindowsTasklist = (%d, %v), want (4242, true)", pid, ok)
 	}
 }
+
+func TestUserScopeAndSubjectMatch(t *testing.T) {
+	got := UserScopeForSubject("100988783380501888122")
+	if got != "u18056d72364ee59d" {
+		t.Fatalf("UserScopeForSubject = %q, want u18056d72364ee59d", got)
+	}
+
+	root := t.TempDir()
+	mgr := NewManager(filepath.Join(root, "Antigravity IDE"), "", "")
+	if err := mgr.WriteUserScope("100988783380501888122"); err != nil {
+		t.Fatalf("WriteUserScope: %v", err)
+	}
+	if scope := mgr.ReadUserScope(); scope != "u18056d72364ee59d" {
+		t.Fatalf("ReadUserScope = %q, want u18056d72364ee59d", scope)
+	}
+	matched, known := mgr.DetectAccountSubjectMatch("100988783380501888122")
+	if !known || !matched {
+		t.Fatalf("DetectAccountSubjectMatch same subject = (%v, %v), want (true, true)", matched, known)
+	}
+	matched, known = mgr.DetectAccountSubjectMatch("105104309579332613318")
+	if !known || matched {
+		t.Fatalf("DetectAccountSubjectMatch different subject = (%v, %v), want (false, true)", matched, known)
+	}
+}
+
+func TestMatchAntigravityIDEAndAgyHubProcessLines(t *testing.T) {
+	ideLine := "47926 /Applications/Antigravity IDE.app/Contents/MacOS/Electron"
+	if pid, ok := matchDesktopProcessLine(ideLine, 100, ""); !ok || pid != 47926 {
+		t.Fatalf("matchDesktopProcessLine IDE = (%d, %v), want (47926, true)", pid, ok)
+	}
+	hubLine := "48216 /Applications/Antigravity IDE.app/Contents/Resources/app/node_modules/@antigravity-ai/cli/bin/darwin-arm64/agy --hub"
+	if pid, ok := matchDesktopProcessLine(hubLine, 100, ""); ok {
+		t.Fatalf("matchDesktopProcessLine should ignore --hub daemon, got pid %d", pid)
+	}
+	if pid, ok := matchAgyHubProcessLine(hubLine, 100); !ok || pid != 48216 {
+		t.Fatalf("matchAgyHubProcessLine = (%d, %v), want (48216, true)", pid, ok)
+	}
+}

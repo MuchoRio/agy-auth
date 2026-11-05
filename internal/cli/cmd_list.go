@@ -277,11 +277,17 @@ func (a *App) cmdAdd(args []string) int {
 					return a.failCode("state_conflict", "Sign in to the matching account in Antigravity Desktop first.", "Antigravity Desktop profile belongs to %s, which does not match CLI account %s", deskEmail, result.Account.Email)
 				}
 				a.warn("Antigravity Desktop profile belongs to %s (CLI account is %s); skipped desktop profile capture to prevent cross-account overwrite", deskEmail, result.Account.Email)
+			} else if scopeMatched, scopeKnown := a.Desktop.DetectAccountSubjectMatch(result.Account.Subject); deskEmail == "" && scopeKnown && !scopeMatched {
+				if *target == "desktop" {
+					return a.failCode("state_conflict", "Sign in to the matching account in Antigravity Desktop first.", "Antigravity credential-user-scope does not match CLI account %s", result.Account.DisplayName())
+				}
+				a.warn("Antigravity credential-user-scope does not match CLI account %s; skipped desktop profile capture to prevent cross-account overwrite", result.Account.DisplayName())
 			} else {
 				deskDest := a.Store.DesktopProfilePath(result.Account.ID)
 				if err := a.Desktop.Snapshot(deskDest); err == nil {
 					desktopCaptured = true
 					result.Account.HasDesktop = true
+					_ = a.Desktop.WriteUserScope(result.Account.Subject)
 					if reg, err := a.Store.Load(); err == nil {
 						for i := range reg.Accounts {
 							if reg.Accounts[i].ID == result.Account.ID {
@@ -295,7 +301,11 @@ func (a *App) cmdAdd(args []string) int {
 			}
 		} else if *target == "desktop" {
 			return a.failCode("desktop_profile_not_found", "Log in to Antigravity Desktop first.", "no active Antigravity Desktop profile found")
+		} else {
+			_ = a.Desktop.WriteUserScope(result.Account.Subject)
 		}
+	} else if a.Desktop != nil && *target == "cli" {
+		_ = a.Desktop.WriteUserScope(result.Account.Subject)
 	}
 
 	if a.JSON {

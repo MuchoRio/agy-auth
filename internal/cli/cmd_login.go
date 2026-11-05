@@ -262,6 +262,9 @@ func (a *App) existingStoredToken(tokenFile agy.TokenFile) *agy.TokenFile {
 }
 
 func (a *App) finishLogin(result registry.UpsertResult, report agy.WriteReport, warnings []string) int {
+	if a.Desktop != nil {
+		_ = a.Desktop.WriteUserScope(result.Account.Subject)
+	}
 	if a.JSON {
 		for _, warning := range warnings {
 			a.warn("%s", warning)

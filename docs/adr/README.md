@@ -26,6 +26,7 @@ Use the next number. Statuses: `Proposed`, `Accepted`, `Superseded`, `Deprecated
 | [0001](0001-repository-harness.md) | Accepted | Adopt a repository harness with mechanical guardrails, without loop engineering |
 | [0002](0002-antigravity-desktop-support.md) | Accepted | Support Antigravity Desktop profiles alongside CLI with default dual-target switching and --relaunch |
 | [0003](0003-vault-and-desktop-integrity-hardening.md) | Accepted | Harden vault key loading, encrypt Desktop snapshots at rest, and enforce safe executable-only process discovery |
+| [0004](0004-antigravity-ide-hub-and-user-scope-sync.md) | Accepted | Support Antigravity IDE, user scope synchronization, and background hub daemon termination |
 
 ## Template
 

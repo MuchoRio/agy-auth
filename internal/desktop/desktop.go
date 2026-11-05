@@ -2,11 +2,12 @@ package desktop
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,11 +55,12 @@ type ProcessOps struct {
 // Manager coordinates profile snapshots, restoration, and process lifecycle
 // for the Antigravity Desktop application.
 type Manager struct {
-	ConfigDir string
-	BinPath   string
-	BackupDir string
-	Codec     backup.Codec
-	Ops       *ProcessOps
+	ConfigDir     string
+	BinPath       string
+	BackupDir     string
+	UserScopeFile string
+	Codec         backup.Codec
+	Ops           *ProcessOps
 }
 
 func (m *Manager) SetCodec(codec backup.Codec) {
@@ -67,16 +69,22 @@ func (m *Manager) SetCodec(codec backup.Codec) {
 
 // NewManager creates a desktop manager for the given configuration directory.
 func NewManager(configDir string, binPath string, backupDir string) *Manager {
+	defaultCfg := DefaultConfigDir()
 	if configDir == "" {
-		configDir = DefaultConfigDir()
+		configDir = defaultCfg
 	}
 	if binPath == "" {
 		binPath = DefaultBinaryPath()
 	}
+	userScopeFile := os.Getenv("AGY_USER_SCOPE_FILE")
+	if userScopeFile == "" && configDir == defaultCfg {
+		userScopeFile = DefaultUserScopePath()
+	}
 	return &Manager{
-		ConfigDir: configDir,
-		BinPath:   binPath,
-		BackupDir: backupDir,
+		ConfigDir:     configDir,
+		BinPath:       binPath,
+		BackupDir:     backupDir,
+		UserScopeFile: userScopeFile,
 	}
 }
 
@@ -91,9 +99,89 @@ func DefaultConfigDir() string {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".config", "Antigravity")
+		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "Antigravity")
+	ideDir := filepath.Join(base, "Antigravity IDE")
+	legacyDir := filepath.Join(base, "Antigravity")
+	if HasProfile(ideDir) {
+		return ideDir
+	}
+	if HasProfile(legacyDir) {
+		return legacyDir
+	}
+	if _, err := os.Stat(ideDir); err == nil {
+		return ideDir
+	}
+	return legacyDir
+}
+
+// DefaultUserScopePath resolves the Antigravity 2.0 credential-user-scope file path.
+func DefaultUserScopePath() string {
+	if env := os.Getenv("AGY_USER_SCOPE_FILE"); env != "" {
+		return env
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, ".config")
+	}
+	return filepath.Join(base, "antigravity", "credential-user-scope")
+}
+
+// UserScopeForSubject returns the Antigravity 2.0 user scope identifier ("u" + sha256(sub)[:16]).
+func UserScopeForSubject(subject string) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(subject))
+	return "u" + hex.EncodeToString(sum[:])[:16]
+}
+
+func (m *Manager) userScopePath() string {
+	if m == nil {
+		return ""
+	}
+	if m.UserScopeFile != "" {
+		return m.UserScopeFile
+	}
+	if m.ConfigDir != "" && m.ConfigDir != DefaultConfigDir() {
+		return filepath.Join(filepath.Dir(m.ConfigDir), "credential-user-scope")
+	}
+	return ""
+}
+
+// WriteUserScope updates the credential-user-scope file for the given Google subject.
+func (m *Manager) WriteUserScope(subject string) error {
+	scope := UserScopeForSubject(subject)
+	path := m.userScopePath()
+	if scope == "" || path == "" {
+		return nil
+	}
+	return writeFileAtomic(path, []byte(scope), 0o600)
+}
+
+// ReadUserScope reads the active credential-user-scope identifier if present.
+func (m *Manager) ReadUserScope() string {
+	path := m.userScopePath()
+	if path == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+// DetectAccountSubjectMatch compares the live credential-user-scope against the expected Google subject.
+func (m *Manager) DetectAccountSubjectMatch(subject string) (matched bool, known bool) {
+	expected := UserScopeForSubject(subject)
+	live := m.ReadUserScope()
+	if expected == "" || live == "" {
+		return false, false
+	}
+	return strings.EqualFold(live, expected), true
 }
 
 // DefaultBinaryPath resolves the installed Antigravity desktop executable.
@@ -103,6 +191,23 @@ func DefaultBinaryPath() string {
 	}
 	switch runtime.GOOS {
 	case "darwin":
+		home, _ := os.UserHomeDir()
+		candidates := []string{
+			"/Applications/Antigravity IDE.app/Contents/MacOS/Electron",
+			"/Applications/Antigravity IDE.app/Contents/MacOS/Antigravity IDE",
+			"/Applications/Antigravity.app/Contents/MacOS/Antigravity",
+		}
+		if home != "" {
+			candidates = append(candidates,
+				filepath.Join(home, "Applications", "Antigravity IDE.app", "Contents", "MacOS", "Electron"),
+				filepath.Join(home, "Applications", "Antigravity.app", "Contents", "MacOS", "Antigravity"),
+			)
+		}
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
 		return "/Applications/Antigravity.app/Contents/MacOS/Antigravity"
 	case "windows":
 		local := os.Getenv("LOCALAPPDATA")
@@ -443,6 +548,74 @@ func (m *Manager) Terminate(pid int, timeout time.Duration) error {
 	return nil
 }
 
+// TerminateHub stops running `agy --hub` background daemon processes so they
+// reload updated credentials and user scope on the next IDE/CLI connection.
+func (m *Manager) TerminateHub(timeout time.Duration) int {
+	if m == nil || m.Ops != nil {
+		return 0
+	}
+	pids := findAgyHubProcesses(os.Getpid())
+	count := 0
+	for _, pid := range pids {
+		if err := m.Terminate(pid, timeout); err == nil {
+			count++
+		}
+	}
+	return count
+}
+
+func findAgyHubProcesses(selfPID int) []int {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	out, err := exec.Command("ps", "-axo", "pid=,args=").Output()
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		if pid, ok := matchAgyHubProcessLine(line, selfPID); ok {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+func matchAgyHubProcessLine(line string, selfPID int) (int, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return 0, false
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) < 3 {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil || pid <= 0 || pid == selfPID {
+		return 0, false
+	}
+	hasHub := false
+	for _, field := range fields[1:] {
+		if field == "--hub" || strings.HasPrefix(field, "--hub=") {
+			hasHub = true
+			break
+		}
+	}
+	if !hasHub {
+		return 0, false
+	}
+	args := strings.TrimSpace(trimmed[len(fields[0]):])
+	exePart := args
+	if idx := strings.Index(exePart, " --"); idx >= 0 {
+		exePart = strings.TrimSpace(exePart[:idx])
+	}
+	base := strings.ToLower(filepath.Base(exePart))
+	if base == "agy" || base == "agy.exe" || strings.EqualFold(filepath.Base(fields[1]), "agy") {
+		return pid, true
+	}
+	return 0, false
+}
+
 // Relaunch launches the Antigravity Desktop binary detached from the current process.
 func (m *Manager) Relaunch() error {
 	bin := m.BinPath
@@ -567,7 +740,7 @@ func matchDesktopProcessLine(line string, selfPID int, configuredBin string) (in
 		return 0, false
 	}
 	args := strings.TrimSpace(trimmed[len(fields[0]):])
-	if strings.Contains(args, "--type=") {
+	if strings.Contains(args, "--type=") || strings.Contains(args, "--hub") {
 		return 0, false
 	}
 
@@ -580,9 +753,14 @@ func matchDesktopProcessLine(line string, selfPID int, configuredBin string) (in
 			return pid, true
 		}
 	}
-	const macAppSuffix = "Antigravity.app/Contents/MacOS/Antigravity"
-	if strings.HasSuffix(exePart, macAppSuffix) || strings.Contains(exePart, macAppSuffix+" ") {
-		return pid, true
+	for _, macAppSuffix := range []string{
+		"Antigravity IDE.app/Contents/MacOS/Electron",
+		"Antigravity IDE.app/Contents/MacOS/Antigravity IDE",
+		"Antigravity.app/Contents/MacOS/Antigravity",
+	} {
+		if strings.HasSuffix(exePart, macAppSuffix) || strings.Contains(exePart, macAppSuffix+" ") {
+			return pid, true
+		}
 	}
 
 	firstToken := fields[1]
@@ -653,41 +831,5 @@ func copyDirTransform(src, dest string, transform func([]byte) ([]byte, error)) 
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		return os.Chmod(path, mode)
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".desktop-tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		_ = os.Remove(tmpName)
-	}()
-
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := io.Copy(tmp, bytes.NewReader(data)); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return backup.WriteFileAtomic(path, data, mode)
 }

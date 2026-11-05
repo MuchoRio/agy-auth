@@ -106,11 +106,12 @@ func (s *Storage) ReadBoth() (keyringRaw, fileRaw []byte, keyringErr, fileErr er
 }
 
 type WriteReport struct {
-	Written []Source
-	Errors  []error
+	Written           []Source
+	Errors            []error
+	ShadowedByKeyring bool
 }
 
-func (r WriteReport) OK() bool { return len(r.Written) > 0 }
+func (r WriteReport) OK() bool { return len(r.Written) > 0 && !r.ShadowedByKeyring }
 
 func (r WriteReport) Error() error {
 	if len(r.Errors) == 0 {
@@ -123,6 +124,7 @@ func (s *Storage) Write(raw []byte) WriteReport {
 	if _, err := ParseTokenFile(raw); err != nil {
 		return WriteReport{Errors: []error{err}}
 	}
+	prevKeyring, _ := s.readKeyring()
 	if err := s.snapshotCurrentExcept(raw); err != nil {
 		return WriteReport{Errors: []error{fmt.Errorf("%w: %v", ErrBackup, err)}}
 	}
@@ -130,6 +132,11 @@ func (s *Storage) Write(raw []byte) WriteReport {
 	if s.KeyringAvailable() {
 		if err := s.writeKeyring(raw); err != nil {
 			report.Errors = append(report.Errors, fmt.Errorf("keyring: %w", err))
+			if len(prevKeyring) > 0 && !bytes.Equal(prevKeyring, raw) {
+				if delErr := s.deleteKeyring(); delErr != nil && !errors.Is(delErr, ErrNoCredentials) {
+					report.ShadowedByKeyring = true
+				}
+			}
 		} else {
 			report.Written = append(report.Written, SourceKeyring)
 		}
@@ -268,42 +275,5 @@ func keyringDelete(service, user string) error {
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		return os.Chmod(path, mode)
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".antigravity-oauth-token-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
+	return backup.WriteFileAtomic(path, data, mode)
 }

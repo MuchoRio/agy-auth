@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-05
+
+### Added
+
+- Antigravity 2.0 / IDE (`Antigravity IDE.app`) support: auto-discovery for configuration directory, app executable, and process tracking.
+- `credential-user-scope` synchronization (`"u" + sha256(sub)[:16]`) across `switch`, `add`, `login`, and `import --activate` to maintain IDE model entitlement parity.
+- Cross-account desktop capture guard: prevents capturing or swapping desktop state when `credential-user-scope` mismatches the target account subject.
+- Background `agy --hub` daemon termination on switch (`--relaunch` or `--close-desktop`) to ensure clean reload of credentials and user scope.
+- CLI settings inspection: `agy-auth status` and `agy-auth switch` now detect and warn if `~/.gemini/antigravity-cli/settings.json` has a pinned `"model"` override.
+- Mutex-guarded, early-exit OAuth client discovery with 4 MB buffer scanning.
+- In-memory usage token refresh persistence callback to avoid redundant OAuth refreshes.
+- Atomic write helpers consolidated across packages into `backup.WriteFileAtomic`.
+- `internal/cli` inclusion in AST `file-permissions` lint checks.
+- Recursive nested encrypted data verification in `hasExistingEncryptedData` for desktop profiles.
+
+### Fixed
+
+- Prevented stale OS Keychain entries from shadowing the file fallback when writeKeyring/deleteKeyring fail.
+- Fixed `Store.HasDesktopProfile` to require non-empty profile directories.
+- Added serialized `Store.Update` read-modify-write helper.
+- Pointed default release download URL to `MuchoRio/agy-auth`.
+- Improved TUI error message formatting during live switch.
+
 ## [0.3.1] - 2026-11-04
 
 ### Fixed
@@ -96,6 +119,7 @@ All notable changes to this project are documented here.
 - npm distribution with prebuilt Linux, macOS, and Windows binaries for x64 and arm64.
 - GitHub Actions CI and release workflows.
 
+[0.3.2]: https://github.com/MuchoRio/agy-auth/releases/tag/v0.3.2
 [0.3.1]: https://github.com/MuchoRio/agy-auth/releases/tag/v0.3.1
 [0.3.0]: https://github.com/fikrilal/agy-auth/releases/tag/v0.3.0
 [0.2.0]: https://github.com/fikrilal/agy-auth/releases/tag/v0.2.0

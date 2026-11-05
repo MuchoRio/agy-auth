@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultUpdateURL        = "https://registry.npmjs.org/%40fikrilal%2Fagy-auth/latest"
-	defaultUpdateReleaseURL = "https://github.com/fikrilal/agy-auth/releases/download"
+	defaultUpdateReleaseURL = "https://github.com/MuchoRio/agy-auth/releases/download"
 	updateCheckInterval     = 24 * time.Hour
 	updateCheckTimeout      = 2 * time.Second
 	updateDownloadTimeout   = 60 * time.Second

@@ -138,6 +138,9 @@ func (a *App) cmdImport(args []string) int {
 				Hint:    fmt.Sprintf("Run `agy-auth switch %s` after fixing credential storage.", report.Imported[0].ID),
 			})
 		}
+		if a.Desktop != nil {
+			_ = a.Desktop.WriteUserScope(report.Imported[0].Subject)
+		}
 		report.Activated = true
 	}
 

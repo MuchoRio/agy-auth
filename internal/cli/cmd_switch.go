@@ -226,7 +226,10 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 				if reg.Active != "" && reg.Active != account.ID {
 					if prev := reg.FindByID(reg.Active); prev != nil && prev.HasDesktop && desktop.HasProfile(a.Desktop.ConfigDir) {
 						deskEmail := a.Desktop.DetectAccountEmail()
-						if deskEmail == "" || prev.Email == "" || strings.EqualFold(deskEmail, prev.Email) {
+						scopeMatched, scopeKnown := a.Desktop.DetectAccountSubjectMatch(prev.Subject)
+						emailOK := deskEmail == "" || prev.Email == "" || strings.EqualFold(deskEmail, prev.Email)
+						scopeOK := !scopeKnown || scopeMatched
+						if emailOK && scopeOK {
 							_ = a.Desktop.Snapshot(a.Store.DesktopProfilePath(prev.ID))
 						}
 					}
@@ -239,6 +242,10 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 				} else {
 					desktopSwitched = true
 					account.HasDesktop = true
+					_ = a.Desktop.WriteUserScope(account.Subject)
+					if opts.Relaunch || opts.CloseDesktop {
+						_ = a.Desktop.TerminateHub(3 * time.Second)
+					}
 					if opts.Relaunch {
 						if err := a.Desktop.Relaunch(); err != nil {
 							warnings = append(warnings, fmt.Sprintf("could not relaunch Antigravity Desktop: %v", err))
@@ -248,6 +255,18 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 					}
 				}
 			}
+		}
+	}
+
+	if a.Desktop != nil && (cliSwitched || desktopSwitched) {
+		_ = a.Desktop.WriteUserScope(account.Subject)
+		if (opts.Relaunch || opts.CloseDesktop) && !desktopSwitched {
+			_ = a.Desktop.TerminateHub(3 * time.Second)
+		}
+	}
+	if cliSwitched {
+		if modelOverride := a.detectCLIModelOverride(); modelOverride != "" {
+			warnings = append(warnings, fmt.Sprintf("CLI settings.json pins model to %q (%s); remove \"model\" if it overrides your selected model", modelOverride, a.cliSettingsPath()))
 		}
 	}
 

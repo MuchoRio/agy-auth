@@ -245,6 +245,10 @@ func (s *Store) now() time.Time {
 	return time.Now()
 }
 
+func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
+	return writeFileAtomic(path, data, mode)
+}
+
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

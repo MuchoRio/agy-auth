@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fikrilal/agy-auth/internal/agy"
@@ -35,6 +36,7 @@ const (
 )
 
 var (
+	clientMu     sync.Mutex
 	ClientID     = os.Getenv("AGY_AUTH_CLIENT_ID")
 	ClientSecret = os.Getenv("AGY_AUTH_CLIENT_SECRET")
 )
@@ -259,6 +261,8 @@ func randomURLSafe(size int) (string, error) {
 // the installed agy binary. agy must already be installed to use this tool, so
 // reading its embedded OAuth client avoids shipping the credential pair here.
 func EnsureClient(agyPath string) error {
+	clientMu.Lock()
+	defer clientMu.Unlock()
 	if ClientID != "" && ClientSecret != "" {
 		return nil
 	}
@@ -292,8 +296,9 @@ func EnsureClient(agyPath string) error {
 func discoverClient(reader io.Reader, wantedIDHash, wantedSecretHash string) (string, string, error) {
 	ids := make(map[string]bool)
 	secrets := make(map[string]bool)
-	buf := make([]byte, 1<<20)
+	buf := make([]byte, 4<<20)
 	carry := make([]byte, 0, discoveryCarry)
+	var clientID, clientSecret string
 
 	for {
 		n, err := reader.Read(buf)
@@ -302,6 +307,25 @@ func discoverClient(reader io.Reader, wantedIDHash, wantedSecretHash string) (st
 			chunk = append(chunk, carry...)
 			chunk = append(chunk, buf[:n]...)
 			collectCandidates(chunk, ids, secrets)
+			if clientID == "" {
+				for candidate := range ids {
+					if hashString(candidate) == wantedIDHash {
+						clientID = candidate
+						break
+					}
+				}
+			}
+			if clientSecret == "" {
+				for candidate := range secrets {
+					if hashString(candidate) == wantedSecretHash {
+						clientSecret = candidate
+						break
+					}
+				}
+			}
+			if clientID != "" && clientSecret != "" {
+				return clientID, clientSecret, nil
+			}
 			if len(chunk) > discoveryCarry {
 				carry = append(carry[:0], chunk[len(chunk)-discoveryCarry:]...)
 			} else {
@@ -316,19 +340,6 @@ func discoverClient(reader io.Reader, wantedIDHash, wantedSecretHash string) (st
 		}
 	}
 
-	var clientID, clientSecret string
-	for candidate := range ids {
-		if hashString(candidate) == wantedIDHash {
-			clientID = candidate
-			break
-		}
-	}
-	for candidate := range secrets {
-		if hashString(candidate) == wantedSecretHash {
-			clientSecret = candidate
-			break
-		}
-	}
 	if clientID == "" {
 		return "", "", errors.New("Antigravity OAuth client ID not found")
 	}

@@ -2,7 +2,7 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/fikrilal/agy-auth/internal/backup"
 )
 
 func (a *App) readLine(prompt string) (string, error) {
@@ -130,68 +132,82 @@ func openBrowser(url string) error {
 // runningAgyCount reports the number of agy processes. It returns -1 when the
 // platform does not expose an inexpensive way to check.
 func runningAgyCount() int {
-	if runtime.GOOS != "linux" {
-		return -1
-	}
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return -1
-	}
-	count := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		comm, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "comm"))
+	switch runtime.GOOS {
+	case "linux":
+		entries, err := os.ReadDir("/proc")
 		if err != nil {
-			continue
+			return -1
 		}
-		if strings.TrimSpace(string(comm)) == "agy" {
-			count++
+		count := 0
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			comm, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "comm"))
+			if err != nil {
+				continue
+			}
+			if strings.TrimSpace(string(comm)) == "agy" {
+				count++
+			}
 		}
+		return count
+	case "windows":
+		out, err := exec.Command("tasklist", "/FO", "CSV", "/NH", "/FI", "IMAGENAME eq agy.exe").Output()
+		if err != nil {
+			return -1
+		}
+		count := 0
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), `"agy.exe"`) {
+				count++
+			}
+		}
+		return count
+	default:
+		out, err := exec.Command("ps", "-axo", "comm=").Output()
+		if err != nil {
+			return -1
+		}
+		count := 0
+		for _, line := range strings.Split(string(out), "\n") {
+			base := filepath.Base(strings.TrimSpace(line))
+			if base == "agy" {
+				count++
+			}
+		}
+		return count
 	}
-	return count
+}
+
+func (a *App) cliSettingsPath() string {
+	if env := os.Getenv("AGY_CLI_SETTINGS_FILE"); env != "" {
+		return env
+	}
+	if a != nil && a.Storage != nil && a.Storage.FilePath != "" {
+		return filepath.Join(filepath.Dir(a.Storage.FilePath), "settings.json")
+	}
+	return ""
+}
+
+func (a *App) detectCLIModelOverride() string {
+	path := a.cliSettingsPath()
+	if path == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var settings struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(settings.Model)
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		if err := os.Chmod(path, mode); err != nil && !errors.Is(err, os.ErrPermission) {
-			return err
-		}
-		return nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".agy-auth-tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	if err := os.Chmod(path, mode); err != nil && !errors.Is(err, os.ErrPermission) {
-		return err
-	}
-	return nil
+	return backup.WriteFileAtomic(path, data, mode)
 }

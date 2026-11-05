@@ -238,6 +238,19 @@ func (s *Store) Save(reg *Registry) error {
 	})
 }
 
+func (s *Store) Update(fn func(*Registry) error) error {
+	return s.withLock(func() error {
+		reg, err := s.Load()
+		if err != nil {
+			return err
+		}
+		if err := fn(reg); err != nil {
+			return err
+		}
+		return s.saveUnlocked(reg)
+	})
+}
+
 func (s *Store) saveUnlocked(reg *Registry) error {
 	if err := migrateRegistry(reg); err != nil {
 		return err
@@ -353,8 +366,8 @@ func (s *Store) DesktopProfilePath(id string) string {
 }
 
 func (s *Store) HasDesktopProfile(id string) bool {
-	info, err := os.Stat(s.DesktopProfilePath(id))
-	return err == nil && info.IsDir()
+	entries, err := os.ReadDir(s.DesktopProfilePath(id))
+	return err == nil && len(entries) > 0
 }
 
 func (s *Store) DeleteToken(id string) error {
@@ -854,41 +867,5 @@ func dedupe(accounts []Account) []Account {
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		return os.Chmod(path, mode)
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
+	return backup.WriteFileAtomic(path, data, mode)
 }
