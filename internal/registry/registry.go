@@ -370,6 +370,183 @@ func (s *Store) HasDesktopProfile(id string) bool {
 	return err == nil && info.IsDir()
 }
 
+func (s *Store) InstallationIDPath(id string) (string, error) {
+	if err := validateID(id); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.AccountsDir, id+".installation_id"), nil
+}
+
+// SaveInstallationID stores the account's CLI installation UUID next to its credential.
+func (s *Store) SaveInstallationID(id, value string) error {
+	value = agy.NormalizeInstallationID(value)
+	if value == "" {
+		return agy.ErrInvalidInstallationID
+	}
+	owner, err := s.InstallationOwner(value)
+	if err != nil {
+		return err
+	}
+	if owner != "" && owner != id {
+		return fmt.Errorf("installation id already belongs to %s", owner)
+	}
+	path, err := s.InstallationIDPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.AccountsDir, 0o700); err != nil {
+		return fmt.Errorf("create accounts directory: %w", err)
+	}
+	if err := os.Chmod(s.AccountsDir, 0o700); err != nil {
+		return fmt.Errorf("harden accounts directory: %w", err)
+	}
+	return writeFileAtomic(path, []byte(value), 0o600)
+}
+
+// LoadInstallationID reads the account's stored CLI installation UUID.
+func (s *Store) LoadInstallationID(id string) (string, error) {
+	path, err := s.InstallationIDPath(id)
+	if err != nil {
+		return "", err
+	}
+	value, err := agy.ReadInstallationID(path)
+	if err != nil {
+		if errors.Is(err, agy.ErrInvalidInstallationID) {
+			return "", fmt.Errorf("account %s: %w", id, err)
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+// InstallationOwner reports which account already stores value.
+// An empty owner with a nil error means no account has it. A non-nil error
+// means the accounts directory could not be scanned.
+func (s *Store) InstallationOwner(value string) (string, error) {
+	value = agy.NormalizeInstallationID(value)
+	if value == "" {
+		return "", agy.ErrInvalidInstallationID
+	}
+	entries, err := os.ReadDir(s.AccountsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read installation ids: %w", err)
+	}
+	const suffix = ".installation_id"
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), suffix)
+		if validateID(id) != nil {
+			continue
+		}
+		stored, err := agy.ReadInstallationID(filepath.Join(s.AccountsDir, entry.Name()))
+		if errors.Is(err, agy.ErrInvalidInstallationID) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read installation id for %s: %w", id, err)
+		}
+		if stored == value {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
+// desktopUpdaterIDFile is the Electron updater UUID inside a desktop profile.
+// Keep it equal to desktop.UpdaterIDFile. registry does not import desktop.
+const desktopUpdaterIDFile = ".updaterId"
+
+func (s *Store) DesktopUpdaterPath(id string) (string, error) {
+	if err := validateID(id); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.DesktopDir, id, desktopUpdaterIDFile), nil
+}
+
+// SaveDesktopUpdaterID stores the account's Desktop updater UUID inside its profile directory.
+func (s *Store) SaveDesktopUpdaterID(id, value string) error {
+	value = agy.NormalizeInstallationID(value)
+	if value == "" {
+		return agy.ErrInvalidInstallationID
+	}
+	owner, err := s.DesktopUpdaterOwner(value, id)
+	if err != nil {
+		return err
+	}
+	if owner != "" {
+		return fmt.Errorf("desktop updater id already belongs to %s", owner)
+	}
+	path, err := s.DesktopUpdaterPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.DesktopDir, 0o700); err != nil {
+		return fmt.Errorf("create desktop directory: %w", err)
+	}
+	if err := os.Chmod(s.DesktopDir, 0o700); err != nil {
+		return fmt.Errorf("harden desktop directory: %w", err)
+	}
+	return writeFileAtomic(path, []byte(value), 0o600)
+}
+
+// LoadDesktopUpdaterID reads the account's stored Desktop updater UUID.
+func (s *Store) LoadDesktopUpdaterID(id string) (string, error) {
+	path, err := s.DesktopUpdaterPath(id)
+	if err != nil {
+		return "", err
+	}
+	value, err := agy.ReadInstallationID(path)
+	if err != nil {
+		if errors.Is(err, agy.ErrInvalidInstallationID) {
+			return "", fmt.Errorf("account %s: %w", id, err)
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+// DesktopUpdaterOwner reports an account other than skip that already stores value.
+// An empty skip searches every profile. An empty owner with a nil error means no
+// other account has it. A non-nil error means a profile could not be read.
+func (s *Store) DesktopUpdaterOwner(value, skip string) (string, error) {
+	value = agy.NormalizeInstallationID(value)
+	if value == "" {
+		return "", agy.ErrInvalidInstallationID
+	}
+	entries, err := os.ReadDir(s.DesktopDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read desktop updater ids: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+		if id == skip || validateID(id) != nil {
+			continue
+		}
+		stored, err := agy.ReadInstallationID(filepath.Join(s.DesktopDir, id, desktopUpdaterIDFile))
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, agy.ErrInvalidInstallationID) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read desktop updater id for %s: %w", id, err)
+		}
+		if stored == value {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
 func (s *Store) DeleteToken(id string) error {
 	path, err := s.AccountTokenPath(id)
 	if err != nil {
@@ -377,6 +554,11 @@ func (s *Store) DeleteToken(id string) error {
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete account %s: %w", id, err)
+	}
+	if installPath, err := s.InstallationIDPath(id); err == nil {
+		if err := os.Remove(installPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("delete installation id for %s: %w", id, err)
+		}
 	}
 	if err := os.RemoveAll(s.DesktopProfilePath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete desktop profile %s: %w", id, err)
@@ -426,17 +608,7 @@ func (s *Store) Clean(dryRun bool) (CleanReport, error) {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".json") {
-			continue
-		}
-		id := strings.TrimSuffix(name, ".json")
-		if !strings.HasPrefix(id, "acct_") {
-			continue
-		}
-		if err := validateID(id); err != nil {
-			continue
-		}
-		if known[id] {
+		if !unreferencedAccountFile(name, ".json", known) && !unreferencedAccountFile(name, ".installation_id", known) {
 			continue
 		}
 		report.Snapshots = append(report.Snapshots, name)
@@ -864,6 +1036,19 @@ func dedupe(accounts []Account) []Account {
 		result = append(result, account)
 	}
 	return result
+}
+
+// unreferencedAccountFile reports snapshot names whose account id is not in the registry.
+// suffix is ".json" or ".installation_id". Unknown names are left alone.
+func unreferencedAccountFile(name, suffix string, known map[string]bool) bool {
+	if !strings.HasSuffix(name, suffix) {
+		return false
+	}
+	id := strings.TrimSuffix(name, suffix)
+	if !strings.HasPrefix(id, "acct_") || validateID(id) != nil || known[id] {
+		return false
+	}
+	return true
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {

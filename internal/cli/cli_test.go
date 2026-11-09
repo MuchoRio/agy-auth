@@ -1372,17 +1372,20 @@ func TestRenderAccountTableInteractiveHighlight(t *testing.T) {
 		t.Errorf("expected cyan account styling in output: %q", output)
 	}
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
-	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 lines, got %d: %q", len(lines), output)
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines, got %d: %q", len(lines), output)
 	}
-	if !strings.HasPrefix(lines[0], "   #") {
-		t.Errorf("header should have padding prefix: %q", lines[0])
+	if !strings.HasPrefix(lines[0], "   \x1b[36m#\x1b[0m") {
+		t.Errorf("header should have padding prefix and cyan color: %q", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], "\x1b[32m>\x1b[0m \x1b[1m01\x1b[0m") {
-		t.Errorf("selected row should have cursor prefix: %q", lines[1])
+	if !strings.HasPrefix(lines[1], "\x1b[2m---") {
+		t.Errorf("divider line should have dim dashes: %q", lines[1])
 	}
-	if !strings.HasPrefix(lines[2], "  02") {
-		t.Errorf("unselected row should have padding prefix: %q", lines[2])
+	if !strings.HasPrefix(lines[2], "\x1b[32m>\x1b[0m \x1b[1m01\x1b[0m") {
+		t.Errorf("selected row should have cursor prefix: %q", lines[2])
+	}
+	if !strings.HasPrefix(lines[3], "  02") {
+		t.Errorf("unselected row should have padding prefix: %q", lines[3])
 	}
 
 	out.Reset()
@@ -1393,11 +1396,20 @@ func TestRenderAccountTableInteractiveHighlight(t *testing.T) {
 		t.Errorf("expected no ANSI escape sequences with NoColor: %q", noColorOutput)
 	}
 	noColorLines := strings.Split(strings.TrimRight(noColorOutput, "\n"), "\n")
-	if !strings.HasPrefix(noColorLines[1], "  01") {
-		t.Errorf("unselected row 1 should have padding: %q", noColorLines[1])
+	if len(noColorLines) < 4 {
+		t.Fatalf("expected at least 4 lines in no-color output, got %d: %q", len(noColorLines), noColorOutput)
 	}
-	if !strings.HasPrefix(noColorLines[2], "> 02") {
-		t.Errorf("selected row 2 should have plain cursor prefix: %q", noColorLines[2])
+	if !strings.HasPrefix(noColorLines[0], "   #") {
+		t.Errorf("no-color header should have padding prefix: %q", noColorLines[0])
+	}
+	if !strings.HasPrefix(noColorLines[1], "---") {
+		t.Errorf("no-color divider line should have dashes: %q", noColorLines[1])
+	}
+	if !strings.HasPrefix(noColorLines[2], "  01") {
+		t.Errorf("unselected row 1 should have padding: %q", noColorLines[2])
+	}
+	if !strings.HasPrefix(noColorLines[3], "> 02") {
+		t.Errorf("selected row 2 should have plain cursor prefix: %q", noColorLines[3])
 	}
 }
 
@@ -2638,7 +2650,7 @@ func TestUsageCommand(t *testing.T) {
 	if code := app.Run([]string{"usage"}); code != 0 {
 		t.Fatalf("usage exit = %d, stderr = %s", code, errOut)
 	}
-	for _, want := range []string{"Account:", "GROUP", "Gemini Models", "Claude and GPT models", "58%", "100%", "2026-10-24"} {
+	for _, want := range []string{"Account:", "GROUP", "Gemini Models", "Claude and GPT models", "58%", "100%", "Sat 02:39 (3d 14h)"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("usage output missing %q: %q", want, out.String())
 		}
@@ -3314,4 +3326,459 @@ func TestSwitchUpdatesUserScopeAndWarnsOnCLIModelOverride(t *testing.T) {
 	if statusData["user_scope"] != desktop.UserScopeForSubject("subject-2") {
 		t.Errorf("user_scope = %v", statusData["user_scope"])
 	}
+}
+
+func TestListAll(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "first"}); code != 0 {
+		t.Fatalf("add exit = %d, stderr = %s", code, errOut)
+	}
+	addSecondAccount(t, env, "second@example.com", "subject-2", "refresh-2", "second")
+
+	provider := &testGroupsProvider{groups: usageGroups()}
+	app, out, errOut := env.app("")
+	app.Width = 140
+	app.UsageGroups = provider
+	if code := app.Run([]string{"list", "--all"}); code != 0 {
+		t.Fatalf("list --all exit = %d, stderr = %s", code, errOut)
+	}
+	for _, want := range []string{"ACCOUNT", "GROUP", "5H", "WEEKLY", "Gemini Models", "Claude and GPT models", "58%", "first", "second"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("list --all output missing %q: %q", want, out.String())
+		}
+	}
+
+	provider = &testGroupsProvider{groups: usageGroups()}
+	app, out, errOut = env.app("")
+	app.UsageGroups = provider
+	if code := app.Run([]string{"list", "--all", "--json"}); code != 0 {
+		t.Fatalf("list --all json exit = %d, stderr = %s", code, errOut)
+	}
+	envelope := decodeTestEnvelope(t, out)
+	if envelope.Command != "list" {
+		t.Errorf("command = %q, want list", envelope.Command)
+	}
+	var payload struct {
+		Accounts []struct {
+			Email  string        `json:"email"`
+			Groups []usage.Group `json:"groups"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Accounts) != 2 {
+		t.Fatalf("accounts len = %d", len(payload.Accounts))
+	}
+}
+
+func TestListAllFlagsValidation(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, _ := env.app("")
+
+	if code := app.Run([]string{"list", "--all", "--live"}); code != 2 {
+		t.Errorf("list --all --live exit = %d, want 2", code)
+	}
+	if code := app.Run([]string{"list", "--all", "--active"}); code != 2 {
+		t.Errorf("list --all --active exit = %d, want 2", code)
+	}
+	if code := app.Run([]string{"list", "--all", "--no-usage"}); code != 2 {
+		t.Errorf("list --all --no-usage exit = %d, want 2", code)
+	}
+}
+
+func TestListQuotaTip(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "personal"}); code != 0 {
+		t.Fatalf("add exit = %d, stderr = %s", code, errOut)
+	}
+
+	// When OutTTY is true and quota is present, tip is printed.
+	app, out, errOut := env.app("")
+	app.Width = 120
+	app.OutTTY = true
+	app.Usage = &testUsageProvider{snapshot: usageSnapshot()}
+	if code := app.Run([]string{"list", "--no-sync"}); code != 0 {
+		t.Fatalf("list exit = %d, stderr = %s", code, errOut)
+	}
+	tip := "Tip: Showing limiting quota groups. Run 'agy-auth list --all' to see all groups."
+	if !strings.Contains(out.String(), tip) {
+		t.Errorf("expected list to contain tip %q, got: %q", tip, out.String())
+	}
+
+	// When OutTTY is false (piped output), tip is omitted.
+	app, out, errOut = env.app("")
+	app.Width = 120
+	app.OutTTY = false
+	app.Usage = &testUsageProvider{snapshot: usageSnapshot()}
+	if code := app.Run([]string{"list", "--no-sync"}); code != 0 {
+		t.Fatalf("list exit = %d, stderr = %s", code, errOut)
+	}
+	if strings.Contains(out.String(), tip) {
+		t.Errorf("expected list without OutTTY to omit tip, got: %q", out.String())
+	}
+
+	// When --no-usage is set, tip is omitted even if OutTTY is true.
+	app, out, errOut = env.app("")
+	app.Width = 120
+	app.OutTTY = true
+	app.Usage = &testUsageProvider{snapshot: usageSnapshot()}
+	if code := app.Run([]string{"list", "--no-sync", "--no-usage"}); code != 0 {
+		t.Fatalf("list exit = %d, stderr = %s", code, errOut)
+	}
+	if strings.Contains(out.String(), tip) {
+		t.Errorf("expected list with --no-usage to omit tip, got: %q", out.String())
+	}
+
+	// When --json is set, tip is omitted.
+	app, out, errOut = env.app("")
+	app.OutTTY = true
+	app.Usage = &testUsageProvider{snapshot: usageSnapshot()}
+	if code := app.Run([]string{"list", "--no-sync", "--json"}); code != 0 {
+		t.Fatalf("list exit = %d, stderr = %s", code, errOut)
+	}
+	if strings.Contains(out.String(), tip) {
+		t.Errorf("expected list with --json to omit tip, got: %q", out.String())
+	}
+}
+
+func TestSpinner(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+
+	// 1. When OutTTY is false, startSpinner does nothing.
+	env := newTestEnv(t, true)
+	app, out, _ := env.app("")
+	app.OutTTY = false
+	stop := app.startSpinner("Loading...")
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	if out.Len() != 0 {
+		t.Errorf("expected no output when OutTTY is false, got: %q", out.String())
+	}
+
+	// 2. When JSON is true, startSpinner does nothing.
+	app, out, _ = env.app("")
+	app.OutTTY = true
+	app.JSON = true
+	stop = app.startSpinner("Loading...")
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	if out.Len() != 0 {
+		t.Errorf("expected no output when JSON is true, got: %q", out.String())
+	}
+
+	// 3. Fast stop (< 100ms) does not emit spinner frames.
+	app, out, _ = env.app("")
+	app.OutTTY = true
+	stop = app.startSpinner("Loading...")
+	time.Sleep(20 * time.Millisecond)
+	stop()
+	if out.Len() != 0 {
+		t.Errorf("expected fast stop to emit nothing, got: %q", out.String())
+	}
+
+	// 4. Slow stop (> 100ms) emits spinner and cleanly erases on stop.
+	app, out, _ = env.app("")
+	app.OutTTY = true
+	stop = app.startSpinner("Loading...")
+	time.Sleep(150 * time.Millisecond)
+	stop()
+	output := out.String()
+	if !strings.Contains(output, "Loading...") {
+		t.Errorf("expected spinner output to contain message, got: %q", output)
+	}
+	if !strings.HasSuffix(output, "\r\033[K\033[?25h") {
+		t.Errorf("expected spinner to finish with erase sequence, got: %q", output)
+	}
+
+	// 5. When TERM is dumb, startSpinner does nothing.
+	t.Setenv("TERM", "dumb")
+	app, out, _ = env.app("")
+	app.OutTTY = true
+	stop = app.startSpinner("Loading...")
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	if out.Len() != 0 {
+		t.Errorf("expected no output when TERM is dumb, got: %q", out.String())
+	}
+
+	// 6. When NoColor is true, startSpinner does nothing.
+	t.Setenv("TERM", "xterm-256color")
+	app, out, _ = env.app("")
+	app.OutTTY = true
+	app.NoColor = true
+	stop = app.startSpinner("Loading...")
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	if out.Len() != 0 {
+		t.Errorf("expected no output when NoColor is true, got: %q", out.String())
+	}
+
+	// 7. When InTUI is true, startSpinner does nothing.
+	app, out, _ = env.app("")
+	app.OutTTY = true
+	app.InTUI = true
+	stop = app.startSpinner("Loading...")
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	if out.Len() != 0 {
+		t.Errorf("expected no output when InTUI is true, got: %q", out.String())
+	}
+
+	// 8. When NO_COLOR is set, startSpinner does nothing.
+	t.Setenv("NO_COLOR", "1")
+	app, out, _ = env.app("")
+	app.OutTTY = true
+	stop = app.startSpinner("Loading...")
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	if out.Len() != 0 {
+		t.Errorf("expected no output when NO_COLOR is set, got: %q", out.String())
+	}
+}
+
+func TestTableHeadersAndDivider(t *testing.T) {
+	env := newTestEnv(t, false)
+	rows := []accountRow{
+		{Number: 1, ID: "acct_1", Active: true, Stored: true, Email: "user@example.com", Alias: "test"},
+	}
+
+	t.Run("TTY with color has cyan headers and dim divider", func(t *testing.T) {
+		app, out, _ := env.app("")
+		app.Width = 80
+		app.OutTTY = true
+		app.renderAccountRows(rows, testNow)
+		output := out.String()
+
+		lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+		if len(lines) < 3 {
+			t.Fatalf("expected at least 3 lines, got %d: %q", len(lines), output)
+		}
+
+		// Header row should have cyan styling
+		if !strings.Contains(lines[0], "\x1b[36mACCOUNT\x1b[0m") {
+			t.Errorf("header should have cyan ACCOUNT: %q", lines[0])
+		}
+		if !strings.Contains(lines[0], "\x1b[36m#\x1b[0m") {
+			t.Errorf("header should have cyan #: %q", lines[0])
+		}
+
+		// Divider row should be dim hyphens
+		if !strings.HasPrefix(lines[1], "\x1b[2m---") {
+			t.Errorf("divider should start with dim dashes, got: %q", lines[1])
+		}
+		if visibleWidth(lines[1]) != visibleWidth(lines[0]) {
+			t.Errorf("divider width (%d) should match header width (%d)", visibleWidth(lines[1]), visibleWidth(lines[0]))
+		}
+	})
+
+	t.Run("NoColor has unstyled headers and plain divider", func(t *testing.T) {
+		app, out, _ := env.app("")
+		app.Width = 80
+		app.OutTTY = true
+		app.NoColor = true
+		app.renderAccountRows(rows, testNow)
+		output := out.String()
+
+		if strings.Contains(output, "\x1b[") {
+			t.Errorf("expected no ANSI codes when NoColor is set, got: %q", output)
+		}
+
+		lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+		if len(lines) < 3 {
+			t.Fatalf("expected at least 3 lines, got %d: %q", len(lines), output)
+		}
+
+		if !strings.Contains(lines[0], "ACCOUNT") {
+			t.Errorf("header should contain ACCOUNT: %q", lines[0])
+		}
+		if !strings.HasPrefix(lines[1], "---") {
+			t.Errorf("divider should be plain dashes, got: %q", lines[1])
+		}
+		if visibleWidth(lines[1]) != visibleWidth(lines[0]) {
+			t.Errorf("divider width (%d) should match header width (%d)", visibleWidth(lines[1]), visibleWidth(lines[0]))
+		}
+	})
+}
+
+func TestActiveMarkerBoldYellow(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "first"}); code != 0 {
+		t.Fatalf("add exit = %d, stderr = %s", code, errOut)
+	}
+	addSecondAccount(t, env, "second@example.com", "subject-2", "refresh-2", "second")
+
+	wantMarker := "\x1b[1m\x1b[33m*\x1b[0m\x1b[0m"
+
+	t.Run("list shows bold yellow marker for active account", func(t *testing.T) {
+		app, out, _ := env.app("")
+		app.Width = 120
+		app.OutTTY = true
+		if code := app.Run([]string{"list"}); code != 0 {
+			t.Fatalf("list exit = %d", code)
+		}
+		output := out.String()
+		if !strings.Contains(output, wantMarker) {
+			t.Errorf("expected bold yellow active marker in list output, got: %q", output)
+		}
+	})
+
+	t.Run("list --all shows bold yellow marker and aligns accounts", func(t *testing.T) {
+		provider := &testGroupsProvider{groups: usageGroups()}
+		app, out, _ := env.app("")
+		app.Width = 140
+		app.OutTTY = true
+		app.UsageGroups = provider
+		if code := app.Run([]string{"list", "--all"}); code != 0 {
+			t.Fatalf("list --all exit = %d", code)
+		}
+		output := out.String()
+		if !strings.Contains(output, wantMarker) {
+			t.Errorf("expected bold yellow active marker in list --all output, got: %q", output)
+		}
+	})
+
+	t.Run("NoColor shows plain asterisk", func(t *testing.T) {
+		app, out, _ := env.app("")
+		app.Width = 120
+		app.OutTTY = true
+		app.NoColor = true
+		if code := app.Run([]string{"list"}); code != 0 {
+			t.Fatalf("list exit = %d", code)
+		}
+		output := out.String()
+		if strings.Contains(output, "\x1b[") {
+			t.Errorf("expected no ANSI codes with NoColor, got: %q", output)
+		}
+		if !strings.Contains(output, "*") {
+			t.Errorf("expected plain asterisk with NoColor, got: %q", output)
+		}
+	})
+}
+
+func TestFormatResetTime(t *testing.T) {
+	loc := time.UTC
+	now := time.Date(2026, 11, 8, 6, 28, 0, 0, loc)
+
+	tests := []struct {
+		name   string
+		target time.Time
+		want   string
+	}{
+		{
+			name:   "zero time returns dash",
+			target: time.Time{},
+			want:   "-",
+		},
+		{
+			name:   "past time returns ready",
+			target: now.Add(-10 * time.Minute),
+			want:   "ready",
+		},
+		{
+			name:   "exact now returns ready",
+			target: now,
+			want:   "ready",
+		},
+		{
+			name:   "same day under 1m",
+			target: now.Add(20 * time.Second),
+			want:   "06:28 (<1m)",
+		},
+		{
+			name:   "same day minutes only",
+			target: now.Add(35 * time.Minute),
+			want:   "07:03 (35m)",
+		},
+		{
+			name:   "same day hours and minutes",
+			target: now.Add(4*time.Hour + 35*time.Minute),
+			want:   "11:03 (4h 35m)",
+		},
+		{
+			name:   "same day exact hours",
+			target: now.Add(4 * time.Hour),
+			want:   "10:28 (4h)",
+		},
+		{
+			name:   "next day within 7 days shows weekday",
+			target: time.Date(2026, 11, 9, 0, 17, 0, 0, loc),
+			want:   "Mon 00:17 (17h 49m)",
+		},
+		{
+			name:   "within 7 days shows weekday and days",
+			target: time.Date(2026, 11, 14, 10, 13, 0, 0, loc),
+			want:   "Sat 10:13 (6d 3h)",
+		},
+		{
+			name:   "exact 7 days shows weekday and days",
+			target: time.Date(2026, 11, 15, 6, 28, 0, 0, loc),
+			want:   "Sun 06:28 (7d)",
+		},
+		{
+			name:   "beyond 7 days shows day month and days",
+			target: time.Date(2026, 11, 17, 12, 0, 0, 0, loc),
+			want:   "17 Nov 12:00 (9d 5h)",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatResetTime(tc.target, now)
+			if got != tc.want {
+				t.Errorf("formatResetTime(%v, %v) = %q, want %q", tc.target, now, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSwitchSummaryFormatting(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "first"}); code != 0 {
+		t.Fatalf("add exit = %d, stderr = %s", code, errOut)
+	}
+	addSecondAccount(t, env, "second@example.com", "subject-2", "refresh-2", "second")
+
+	t.Run("TTY switch shows checkmark and tip", func(t *testing.T) {
+		app, out, _ := env.app("")
+		app.Width = 100
+		app.OutTTY = true
+		if code := app.Run([]string{"switch", "second"}); code != 0 {
+			t.Fatalf("switch exit = %d", code)
+		}
+		output := out.String()
+		if !strings.Contains(output, "✔") {
+			t.Errorf("expected checkmark in switch output: %q", output)
+		}
+		if !strings.Contains(output, "Switched to second (second@example.com).") {
+			t.Errorf("expected account title in switch output: %q", output)
+		}
+		if !strings.Contains(output, "•") || !strings.Contains(output, "Wrote") {
+			t.Errorf("expected bullet and wrote in switch output: %q", output)
+		}
+		if !strings.Contains(output, "Tip: Restart running agy sessions to pick up the new credential.") {
+			t.Errorf("expected tip in switch output: %q", output)
+		}
+	})
+
+	t.Run("NoColor switch strips ANSI escapes", func(t *testing.T) {
+		app, out, _ := env.app("")
+		app.Width = 100
+		app.OutTTY = true
+		app.NoColor = true
+		if code := app.Run([]string{"switch", "first"}); code != 0 {
+			t.Fatalf("switch exit = %d", code)
+		}
+		output := out.String()
+		if strings.Contains(output, "\x1b[") {
+			t.Errorf("expected no ANSI codes with NoColor: %q", output)
+		}
+		if !strings.Contains(output, "✔ Switched to") {
+			t.Errorf("expected plain checkmark in NoColor output: %q", output)
+		}
+	})
 }

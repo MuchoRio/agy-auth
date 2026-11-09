@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-09
+
+### Added
+
+- Merged and integrated upstream `fikrilal/agy-auth` v0.4.0 and v0.4.1 feature set:
+  - Per-account CLI `installation_id` snapshot & restore to preserve UUID continuity across account swaps (ADR-0005).
+  - Per-account Antigravity Desktop `.updaterId` preservation inside stored profile directories (ADR-0006).
+  - `agy-auth list --all`: Show all quota groups across all stored accounts directly from the list command.
+  - Interactive quota groups tip when viewing limiting groups in terminal TTY.
+  - Centralized terminal loading spinner (`startSpinner`) during network quota fetching.
+  - Cyan table headers and horizontal table dividers for enhanced terminal contrast and readability.
+  - Bold yellow active account marker (`*`) and human-readable relative reset timestamps (`15:04 (2h 15m)`, `Mon 15:04 (2d 5h)`).
+  - Polished switch and rotate summary outputs with clear status checkmarks, bullet points, and friendly notices.
+
+### Fixed
+
+- Prevented interactive TUI key reader from leaking stdin goroutines on exit via `unix.Poll` and `windows.WaitForSingleObject` with cancellation lifecycle, resolving terminal hangs on subsequent input prompts (`Update now? [y/N]`).
+- Preserved all enterprise security hardening: AES-256-GCM desktop encryption at rest, permission checks, mutex locking, Antigravity IDE Hub daemon termination, and user-scope sync.
+
 ## [0.3.2] - 2026-11-05
 
 ### Added

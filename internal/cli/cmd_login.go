@@ -101,6 +101,8 @@ func (a *App) loginOAuth(alias, authMethod string, noBrowser bool) int {
 	if err != nil {
 		return a.failCode("oauth_error", "Try signing in again.", "could not prepare the credential document")
 	}
+	a.saveLiveAccount()
+	claimLive := a.retainLiveInstallationID()
 	result, err := a.Store.Upsert(raw, alias, true)
 	if err != nil {
 		return a.registryFailure(err, "could not save the logged-in account")
@@ -121,6 +123,9 @@ func (a *App) loginOAuth(alias, authMethod string, noBrowser bool) int {
 	}
 	if result.Account.Email == "" {
 		warnings = append(warnings, "the ID token did not include an email address")
+	}
+	if err := a.ensureLiveInstallationID(result.Account.ID, claimLive); err != nil {
+		warnings = append(warnings, fmt.Sprintf("could not set the installation id: %v", err))
 	}
 	return a.finishLogin(result, report, warnings)
 }
@@ -182,6 +187,7 @@ func (a *App) loginViaAgy(alias, agyPath string) int {
 	if err != nil {
 		return a.registryFailure(err, "could not save the new account")
 	}
+	claimLive := a.retainLiveInstallationID()
 	report := a.Storage.Write(raw)
 	if !report.OK() {
 		if errors.Is(report.Error(), agy.ErrBackup) {
@@ -205,6 +211,9 @@ func (a *App) loginViaAgy(alias, agyPath string) int {
 	}
 	if result.Account.Email == "" {
 		warnings = append(warnings, "the ID token did not include an email address")
+	}
+	if err := a.ensureLiveInstallationID(result.Account.ID, claimLive); err != nil {
+		warnings = append(warnings, fmt.Sprintf("could not set the installation id: %v", err))
 	}
 	return a.finishLogin(result, report, warnings)
 }

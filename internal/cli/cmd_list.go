@@ -13,6 +13,7 @@ import (
 
 func (a *App) cmdList(args []string) int {
 	fs := a.newFlagSet("list")
+	all := fs.Bool("all", false, "show all quota groups across all stored accounts")
 	activeOnly := fs.Bool("active", false, "only show the active account")
 	noSync := fs.Bool("no-sync", false, "do not refresh the stored snapshot of the live account")
 	noUsage := fs.Bool("no-usage", false, "do not look up plan and quota")
@@ -27,7 +28,19 @@ func (a *App) cmdList(args []string) int {
 		if *activeOnly {
 			return a.usageFor("list", "list --live cannot be combined with --active")
 		}
+		if *all {
+			return a.usageFor("list", "list --live cannot be combined with --all")
+		}
 		return a.runLive(liveModeList, false)
+	}
+	if *all {
+		if *activeOnly {
+			return a.usageFor("list", "list --all cannot be combined with --active")
+		}
+		if *noUsage {
+			return a.usageFor("list", "list --all cannot be combined with --no-usage")
+		}
+		return a.cmdUsageAll()
 	}
 
 	reg, err := a.Store.Load()
@@ -211,6 +224,19 @@ func (a *App) cmdList(args []string) int {
 		fmt.Fprintln(a.Out)
 	}
 	a.renderAccountRows(displayRows, now)
+	if a.OutTTY && !*noUsage {
+		hasQuota := false
+		for _, row := range displayRows {
+			if row.Usage != nil && (row.Usage.FiveHour != nil || row.Usage.Weekly != nil) {
+				hasQuota = true
+				break
+			}
+		}
+		if hasQuota {
+			fmt.Fprintln(a.Out)
+			fmt.Fprintln(a.Out, a.dim("Tip: Showing limiting quota groups. Run 'agy-auth list --all' to see all groups."))
+		}
+	}
 	return 0
 }
 
@@ -263,6 +289,11 @@ func (a *App) cmdAdd(args []string) int {
 	if err != nil {
 		return a.registryFailure(err, "could not save the live agy credential")
 	}
+	if *target == "all" || *target == "cli" {
+		if err := a.ensureLiveInstallationID(result.Account.ID, true); err != nil {
+			a.warn("could not set the installation id: %v", err)
+		}
+	}
 
 	desktopCaptured := false
 	if a.Desktop != nil && (*target == "all" || *target == "desktop") {
@@ -286,6 +317,9 @@ func (a *App) cmdAdd(args []string) int {
 				deskDest := a.Store.DesktopProfilePath(result.Account.ID)
 				if err := a.Desktop.Snapshot(deskDest); err == nil {
 					desktopCaptured = true
+					if err := a.ensureDesktopUpdaterID(result.Account.ID, true, true); err != nil {
+						a.warn("could not set the desktop updater id: %v", err)
+					}
 					result.Account.HasDesktop = true
 					_ = a.Desktop.WriteUserScope(result.Account.Subject)
 					if reg, err := a.Store.Load(); err == nil {

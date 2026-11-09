@@ -104,23 +104,31 @@ func (a *App) cmdSwitch(args []string) int {
 		return 0
 	}
 
-	fmt.Fprintf(a.Out, "Switched to %s.\n", res.Account.DisplayName())
+	a.printSwitchSummary(fmt.Sprintf("Switched to %s.", res.Account.DisplayName()), res)
+	return 0
+}
+
+func (a *App) printSwitchSummary(title string, res *switchResult) {
+	fmt.Fprintf(a.Out, "%s %s\n", a.green("✔"), a.bold(title))
 	if res.CLISwitched {
-		fmt.Fprintf(a.Out, "Wrote %s.\n", strings.Join(res.Written, " and "))
+		fmt.Fprintf(a.Out, "  %s Wrote %s.\n", a.dim("•"), strings.Join(res.Written, " and "))
 	}
 	if res.DesktopSwitched {
-		fmt.Fprintln(a.Out, "Restored Antigravity Desktop profile.")
+		fmt.Fprintf(a.Out, "  %s Restored Antigravity Desktop profile.\n", a.dim("•"))
 		if res.DesktopRelaunched {
-			fmt.Fprintln(a.Out, "Relaunched Antigravity Desktop.")
+			fmt.Fprintf(a.Out, "  %s Relaunched Antigravity Desktop.\n", a.dim("•"))
 		}
 	}
 	for _, warning := range res.Warnings {
-		fmt.Fprintf(a.Err, "warning: %s\n", warning)
+		if strings.Contains(warning, "access token is expired") {
+			fmt.Fprintf(a.Out, "  %s %s\n", a.yellow("!"), a.dim("Notice: access token expired; agy will auto-refresh on next run."))
+		} else {
+			fmt.Fprintf(a.Err, "%s %s\n", a.yellow("warning:"), warning)
+		}
 	}
 	if res.CLISwitched {
-		fmt.Fprintln(a.Out, "Restart agy for the new account to take effect (running sessions keep the old credential).")
+		fmt.Fprintf(a.Out, "\n%s\n", a.dim("Tip: Restart running agy sessions to pick up the new credential."))
 	}
-	return 0
 }
 
 type switchOptions struct {
@@ -176,6 +184,7 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 					warnings = append(warnings, "this snapshot has no refresh token; it will stop working when the access token expires")
 				}
 
+				claimLive := a.retainLiveInstallationID()
 				report = a.Storage.Write(raw)
 				if !report.OK() {
 					if errors.Is(report.Error(), agy.ErrBackup) {
@@ -185,6 +194,9 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 				}
 				if err := report.Error(); err != nil {
 					warnings = append(warnings, err.Error())
+				}
+				if err := a.ensureLiveInstallationID(account.ID, claimLive); err != nil {
+					warnings = append(warnings, fmt.Sprintf("could not set the installation id: %v", err))
 				}
 				cliSwitched = true
 				for _, source := range report.Written {
@@ -233,6 +245,10 @@ func (a *App) switchAccount(reg *registry.Registry, account *registry.Account, o
 							_ = a.Desktop.Snapshot(a.Store.DesktopProfilePath(prev.ID))
 						}
 					}
+				}
+				claimLive := a.retainDesktopUpdaterID()
+				if err := a.ensureDesktopUpdaterID(account.ID, claimLive, false); err != nil {
+					warnings = append(warnings, fmt.Sprintf("could not set the desktop updater id: %v", err))
 				}
 				if err := a.Desktop.Restore(deskProfile); err != nil {
 					if tgt == "desktop" {
