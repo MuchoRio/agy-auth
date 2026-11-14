@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -64,6 +65,8 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T, withToken bool) *testEnv {
 	t.Helper()
+	t.Setenv("AGY_AUTH_AGY_SETTINGS_FILE", "")
+	t.Setenv("AGY_CLI_SETTINGS_FILE", "")
 	dir := t.TempDir()
 	env := &testEnv{
 		dir:       dir,
@@ -168,8 +171,10 @@ func TestCLILifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("token permissions = %o", info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("token permissions = %o", info.Mode().Perm())
+		}
 	}
 
 	app, _, errOut = env.app("")
@@ -1979,6 +1984,20 @@ func TestLoginReusesStoredRefreshToken(t *testing.T) {
 
 func fakeAgyLogin(t *testing.T, token []byte, exitCode int) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(t.TempDir(), "agy.cmd")
+		script := "@echo off\r\n"
+		if token != nil {
+			b64 := base64.StdEncoding.EncodeToString(token)
+			script += `if not exist "%USERPROFILE%\.gemini\antigravity-cli" mkdir "%USERPROFILE%\.gemini\antigravity-cli"` + "\r\n"
+			script += fmt.Sprintf(`powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes($env:USERPROFILE + '\.gemini\antigravity-cli\antigravity-oauth-token', [System.Convert]::FromBase64String('%s'))"`+"\r\n", b64)
+		}
+		script += fmt.Sprintf("exit /b %d\r\n", exitCode)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
 	path := filepath.Join(t.TempDir(), "agy")
 	script := "#!/bin/sh\n"
 	if token != nil {
@@ -3781,4 +3800,481 @@ func TestSwitchSummaryFormatting(t *testing.T) {
 			t.Errorf("expected plain checkmark in NoColor output: %q", output)
 		}
 	})
+}
+
+func TestGCPPayGoLoginAddSwitchAndStatus(t *testing.T) {
+	env := newTestEnv(t, true)
+
+	// 1. Save initial personal (consumer) account.
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "personal"}); code != 0 {
+		t.Fatalf("add personal exit = %d, stderr = %s", code, errOut)
+	}
+
+	// 2. Tag and add the same Google identity as a GCP PayGo account for sample-gcp-project.
+	app, out, errOut := env.app("")
+	if code := app.Run([]string{"add", "--gcp", "--project", "sample-gcp-project", "--region", "global", "--alias", "work"}); code != 0 {
+		t.Fatalf("add gcp exit = %d, stderr = %s", code, errOut)
+	}
+	if !strings.Contains(out.String(), "Added account work") {
+		t.Errorf("add gcp output = %q", out.String())
+	}
+
+	// Verify both accounts coexist in the registry and can be switched between.
+	app, out, errOut = env.app("")
+	if code := app.Run([]string{"list", "--no-usage", "--json"}); code != 0 {
+		t.Fatalf("list exit = %d, stderr = %s", code, errOut)
+	}
+	envl := decodeTestEnvelope(t, out)
+	var listPayload struct {
+		Accounts []accountRow `json:"accounts"`
+		Current  *accountRow  `json:"current"`
+	}
+	if err := json.Unmarshal(envl.Data, &listPayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(listPayload.Accounts) != 2 {
+		t.Fatalf("accounts = %d, want 2: %+v", len(listPayload.Accounts), listPayload.Accounts)
+	}
+	if listPayload.Current == nil || listPayload.Current.AuthMethod != "gcp" || listPayload.Current.ProjectID != "sample-gcp-project" || listPayload.Current.Region != "global" {
+		t.Errorf("current = %+v", listPayload.Current)
+	}
+
+	settingsPath := filepath.Join(filepath.Dir(env.tokenPath), "settings.json")
+	settingsRaw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("settings.json should exist after gcp add: %v", err)
+	}
+	var settingsDoc map[string]any
+	if err := json.Unmarshal(settingsRaw, &settingsDoc); err != nil {
+		t.Fatal(err)
+	}
+	gcpSettings, ok := settingsDoc["gcp"].(map[string]any)
+	if !ok || gcpSettings["project"] != "sample-gcp-project" || gcpSettings["location"] != "global" {
+		t.Errorf("settings.json gcp block = %+v", settingsDoc["gcp"])
+	}
+
+	// Switch to personal and verify live credential is consumer.
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"switch", "personal"}); code != 0 {
+		t.Fatalf("switch personal exit = %d, stderr = %s", code, errOut)
+	}
+	liveRaw, err := os.ReadFile(env.tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveToken, err := agy.ParseTokenFile(liveRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveToken.AuthMethod != "consumer" || liveToken.ProjectID != "" {
+		t.Errorf("live token after switching to personal = %+v", liveToken)
+	}
+	settingsRaw, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsDoc = nil
+	if err := json.Unmarshal(settingsRaw, &settingsDoc); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasGCP := settingsDoc["gcp"]; hasGCP {
+		t.Errorf("settings.json should not have gcp block after switching to personal: %+v", settingsDoc)
+	}
+
+	// Switch back by project ID and verify live credential has GCP fields.
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"switch", "sample-gcp-project"}); code != 0 {
+		t.Fatalf("switch by project ID exit = %d, stderr = %s", code, errOut)
+	}
+	liveRaw, err = os.ReadFile(env.tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveToken, err = agy.ParseTokenFile(liveRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveToken.AuthMethod != "gcp" || liveToken.ProjectID != "sample-gcp-project" || liveToken.Region != "global" {
+		t.Errorf("live token after switching to gcp = %+v", liveToken)
+	}
+	settingsRaw, err = os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsDoc = nil
+	if err := json.Unmarshal(settingsRaw, &settingsDoc); err != nil {
+		t.Fatal(err)
+	}
+	gcpSettings, ok = settingsDoc["gcp"].(map[string]any)
+	if !ok || gcpSettings["project"] != "sample-gcp-project" || gcpSettings["location"] != "global" {
+		t.Errorf("settings.json gcp block after switching back = %+v", settingsDoc["gcp"])
+	}
+
+	// Verify current and status include project and region.
+	app, out, errOut = env.app("")
+	if code := app.Run([]string{"current"}); code != 0 {
+		t.Fatalf("current exit = %d, stderr = %s", code, errOut)
+	}
+	if !strings.Contains(out.String(), "project: sample-gcp-project") || !strings.Contains(out.String(), "region:  global") {
+		t.Errorf("current output = %q", out.String())
+	}
+
+	app, out, errOut = env.app("")
+	if code := app.Run([]string{"status"}); code != 0 {
+		t.Fatalf("status exit = %d, stderr = %s", code, errOut)
+	}
+	if !strings.Contains(out.String(), "Project:    sample-gcp-project") || !strings.Contains(out.String(), "Region:     global") {
+		t.Errorf("status output = %q", out.String())
+	}
+}
+
+func TestLoginGCPExistingRefreshTokenAndPromptValidation(t *testing.T) {
+	setTestOAuthClient(t)
+	oldGCPID, oldGCPSecret := oauth.GCPClientID, oauth.GCPClientSecret
+	oauth.GCPClientID, oauth.GCPClientSecret = "gcp-client", "gcp-secret"
+	t.Cleanup(func() {
+		oauth.GCPClientID, oauth.GCPClientSecret = oldGCPID, oldGCPSecret
+	})
+
+	env := newTestEnv(t, true)
+	app, _, _ := env.app("")
+	if code := app.Run([]string{"add", "--alias", "personal"}); code != 0 {
+		t.Fatalf("add personal exit = %d", code)
+	}
+
+	// Interactive TTY login --gcp with empty project ID must fail validation.
+	app, _, errOut := env.app("\n")
+	app.TTY = true
+	if code := app.Run([]string{"login", "--gcp"}); code != 2 || !strings.Contains(errOut.String(), "project ID cannot be empty") {
+		t.Fatalf("interactive empty project exit=%d, stderr=%q", code, errOut.String())
+	}
+
+	// Scoped refresh token reuse: do not reuse consumer refresh token for GCP login.
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"access_token": "gcp-access",
+			"expires_in":   3600,
+			"token_type":   "Bearer",
+			"id_token":     makeCLIIDToken(t, "user@example.com", "subject-1"),
+		})
+	}))
+	defer server.Close()
+	oldEndpoint, oldClient := oauth.TokenEndpoint, oauth.HTTPClient
+	oauth.TokenEndpoint, oauth.HTTPClient = server.URL, server.Client()
+	t.Cleanup(func() {
+		oauth.TokenEndpoint, oauth.HTTPClient = oldEndpoint, oldClient
+	})
+
+	app, _, errOut = env.app("the-code\n")
+	if code := app.Run([]string{"login", "--gcp", "--project", "sample-gcp-project", "--no-browser"}); code == 0 {
+		t.Fatal("expected GCP login without refresh token to fail instead of reusing consumer refresh token")
+	} else if !strings.Contains(errOut.String(), "refresh token") {
+		t.Errorf("unexpected error = %q", errOut.String())
+	}
+}
+
+func TestLoginViaAgyGCPRequiresProjectID(t *testing.T) {
+	env := newTestEnv(t, true)
+	script := fakeAgyLogin(t, makeCLIToken(t, "second@example.com", "subject-2", "refresh-2"), 0)
+	app, _, errOut := loginTestApp(t, env)
+	if code := app.Run([]string{"login", "--via-agy", "--gcp", "--agy", script}); code != 1 {
+		t.Fatalf("login --via-agy --gcp without project exit = %d, stderr = %s", code, errOut)
+	}
+	if !strings.Contains(errOut.String(), "project_id") {
+		t.Errorf("unexpected stderr = %q", errOut.String())
+	}
+}
+
+func TestImportPurgePreservesDualProfileAliasesAndSettingsWarnings(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "personal"}); code != 0 {
+		t.Fatalf("add personal exit = %d, stderr = %s", code, errOut)
+	}
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"add", "--gcp", "--project", "sample-gcp-project", "--alias", "work"}); code != 0 {
+		t.Fatalf("add gcp exit = %d, stderr = %s", code, errOut)
+	}
+
+	// Test single-file import with --gcp and --activate.
+	importPath := filepath.Join(t.TempDir(), "cred.json")
+	if err := os.WriteFile(importPath, makeCLIToken(t, "other@example.com", "subject-other", "refresh-other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"import", importPath, "--gcp", "--project", "imported-proj", "--alias", "imp-gcp", "--activate"}); code != 0 {
+		t.Fatalf("import --gcp exit = %d, stderr = %s", code, errOut)
+	}
+
+	// Simulate subject-fallback purge where old IDs differed from snapshot IDs for dual profiles.
+	store := registry.NewStore(env.storeDir)
+	regBefore, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range regBefore.Accounts {
+		if regBefore.Accounts[i].Subject == "subject-1" {
+			regBefore.Accounts[i].ID = fmt.Sprintf("acct_legacy_%d", i)
+		}
+	}
+	if err := store.Save(regBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"import", "--purge"}); code != 0 {
+		t.Fatalf("import --purge exit = %d, stderr = %s", code, errOut)
+	}
+	regAfter, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(regAfter.Accounts) != 3 {
+		t.Fatalf("accounts after purge = %d, want 3", len(regAfter.Accounts))
+	}
+	aliases := map[string]string{}
+	for _, acct := range regAfter.Accounts {
+		if acct.Subject == "subject-1" {
+			aliases[acct.AuthMethod] = acct.Alias
+		}
+	}
+	if aliases[agy.AuthMethodConsumer] != "personal" || aliases[agy.AuthMethodGCP] != "work" {
+		t.Errorf("lost profile aliases on purge: %+v", aliases)
+	}
+
+	// Make settings.json unwritable (a directory) and confirm SyncSettings warnings are emitted cleanly.
+	settingsPath := filepath.Join(filepath.Dir(env.tokenPath), "settings.json")
+	_ = os.RemoveAll(settingsPath)
+	if err := os.MkdirAll(settingsPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"add", "--gcp", "--project", "warn-project", "--alias", "warn-gcp"}); code != 0 {
+		t.Fatalf("add with broken settings.json exit = %d, stderr = %s", code, errOut)
+	}
+	if !strings.Contains(errOut.String(), "warning: settings:") {
+		t.Errorf("expected settings warning on add, stderr = %q", errOut.String())
+	}
+
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"remove", "--logout", "--yes", "warn-gcp"}); code != 0 {
+		t.Fatalf("remove --logout with broken settings.json exit = %d, stderr = %s", code, errOut)
+	}
+	if !strings.Contains(errOut.String(), "warning: settings:") {
+		t.Errorf("expected settings warning on remove --logout, stderr = %q", errOut.String())
+	}
+}
+
+func TestAddTargetDesktopRejectsGCPFlags(t *testing.T) {
+	env := newTestEnv(t, true)
+	for _, args := range [][]string{
+		{"add", "--target=desktop", "--gcp", "--project", "sample-gcp-project"},
+		{"add", "--target", "desktop", "--project", "sample-gcp-project"},
+	} {
+		app, _, errOut := env.app("")
+		if code := app.Run(args); code != 2 {
+			t.Errorf("%v: exit = %d, want 2 (stderr = %s)", args, code, errOut.String())
+		}
+		if !strings.Contains(errOut.String(), "cannot be used with --target desktop") {
+			t.Errorf("%v: unexpected stderr = %q", args, errOut.String())
+		}
+	}
+	settingsPath := filepath.Join(filepath.Dir(env.tokenPath), "settings.json")
+	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
+		t.Errorf("settings.json should not be created when add --target desktop fails")
+	}
+}
+
+func TestLoginRejectsInvalidAuthMethod(t *testing.T) {
+	env := newTestEnv(t, false)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"login", "--auth-method", "enterprise"}); code != 2 {
+		t.Fatalf("login invalid auth-method exit = %d, want 2 (stderr = %s)", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "--auth-method must be") {
+		t.Errorf("unexpected stderr = %q", errOut.String())
+	}
+}
+
+func TestSwitchTargetDesktopDoesNotRewriteCLISettings(t *testing.T) {
+	env := newTestEnv(t, true)
+	app, _, errOut := env.app("")
+	if code := app.Run([]string{"add", "--alias", "personal"}); code != 0 {
+		t.Fatalf("add personal exit = %d, stderr = %s", code, errOut)
+	}
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"add", "--gcp", "--project", "sample-gcp-project", "--region", "global", "--alias", "work"}); code != 0 {
+		t.Fatalf("add work gcp exit = %d, stderr = %s", code, errOut)
+	}
+
+	reg, err := app.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := reg.Resolve("personal")
+	if len(matches) != 1 {
+		t.Fatalf("personal resolve = %+v", matches)
+	}
+	deskProfile := app.Store.DesktopProfilePath(matches[0].ID)
+	if err := os.MkdirAll(deskProfile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deskProfile, "Cookies"), []byte("cookies-personal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app, _, errOut = env.app("")
+	if code := app.Run([]string{"switch", "personal", "--target=desktop"}); code != 0 {
+		t.Fatalf("switch --target=desktop exit = %d, stderr = %s", code, errOut)
+	}
+
+	liveRaw, err := os.ReadFile(env.tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveToken, err := agy.ParseTokenFile(liveRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if liveToken.AuthMethod != agy.AuthMethodGCP || liveToken.ProjectID != "sample-gcp-project" {
+		t.Errorf("live CLI token changed on --target=desktop switch: %+v", liveToken)
+	}
+
+	settingsRaw, err := os.ReadFile(filepath.Join(filepath.Dir(env.tokenPath), "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settingsDoc map[string]any
+	if err := json.Unmarshal(settingsRaw, &settingsDoc); err != nil {
+		t.Fatal(err)
+	}
+	gcpSettings, ok := settingsDoc["gcp"].(map[string]any)
+	if !ok || gcpSettings["project"] != "sample-gcp-project" || gcpSettings["location"] != "global" {
+		t.Errorf("CLI settings.json gcp block clobbered by --target=desktop switch: %+v", settingsDoc)
+	}
+
+	deskRestored, err := os.ReadFile(filepath.Join(app.Desktop.ConfigDir, "Cookies"))
+	if err != nil || string(deskRestored) != "cookies-personal" {
+		t.Errorf("unexpected restored desktop cookies: %v, %q", err, string(deskRestored))
+	}
+}
+
+func TestUsageRefreshPersistsTokenForDualScopeAccount(t *testing.T) {
+	setTestOAuthClient(t)
+	oldGCPID, oldGCPSecret := oauth.GCPClientID, oauth.GCPClientSecret
+	oauth.GCPClientID, oauth.GCPClientSecret = "gcp-client", "gcp-secret"
+	t.Cleanup(func() {
+		oauth.GCPClientID, oauth.GCPClientSecret = oldGCPID, oldGCPSecret
+	})
+
+	env := newTestEnv(t, false)
+	store := registry.NewStore(env.storeDir)
+	consumerRaw := makeCLIToken(t, "user@example.com", "subject-1", "refresh-consumer")
+	consumerRes, err := store.Upsert(consumerRaw, "personal", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gcpRaw, err := json.Marshal(map[string]any{
+		"token": map[string]any{
+			"access_token":  "expired-gcp-access",
+			"token_type":    "Bearer",
+			"refresh_token": "refresh-gcp",
+			"expiry":        testNow.Add(-time.Hour).Format(time.RFC3339Nano),
+		},
+		"auth_method": agy.AuthMethodGCP,
+		"project_id":  "sample-gcp-project",
+		"region":      agy.RegionGlobal,
+		"id_token":    makeCLIIDToken(t, "user@example.com", "subject-1"),
+		"custom_meta": "keep",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcpRes, err := store.Upsert(gcpRaw, "work", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.URL.Path == "/oauth/token":
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"access_token": "fresh-gcp-access",
+				"expires_in":   3600,
+				"token_type":   "Bearer",
+			})
+		case strings.HasSuffix(request.URL.Path, ":loadCodeAssist"):
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"cloudaicompanionProject": "sample-gcp-project",
+			})
+		case strings.HasSuffix(request.URL.Path, ":retrieveUserQuotaSummary"):
+			_ = json.NewEncoder(writer).Encode(map[string]any{})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	oldEndpoint, oldClient := oauth.TokenEndpoint, oauth.HTTPClient
+	oauth.TokenEndpoint, oauth.HTTPClient = server.URL+"/oauth/token", server.Client()
+	t.Cleanup(func() {
+		oauth.TokenEndpoint, oauth.HTTPClient = oldEndpoint, oldClient
+	})
+
+	client := &usage.Client{
+		Endpoint:   server.URL + "/v1internal",
+		UserAgent:  "antigravity/test",
+		HTTPClient: server.Client(),
+		Now:        func() time.Time { return testNow },
+		OnTokenRefresh: func(tok *agy.TokenFile) {
+			persistRefreshedToken(store, tok)
+		},
+	}
+
+	storedGCPRaw, err := store.LoadToken(gcpRes.Account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcpTok, err := agy.ParseTokenFile(storedGCPRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := client.Fetch(context.Background(), gcpRes.Account.ID, gcpTok)
+	if err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+	if snap.Plan != "PayGo" {
+		t.Errorf("Plan = %q, want PayGo", snap.Plan)
+	}
+
+	updatedGCPRaw, err := store.LoadToken(gcpRes.Account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedGCP, err := agy.ParseTokenFile(updatedGCPRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedGCP.Token.AccessToken != "fresh-gcp-access" || updatedGCP.AuthMethod != agy.AuthMethodGCP || updatedGCP.ProjectID != "sample-gcp-project" {
+		t.Errorf("persisted GCP snapshot = %+v", updatedGCP)
+	}
+	var updatedDoc map[string]any
+	if err := json.Unmarshal(updatedGCPRaw, &updatedDoc); err != nil {
+		t.Fatal(err)
+	}
+	if updatedDoc["custom_meta"] != "keep" {
+		t.Errorf("lost custom_meta on OnTokenRefresh save: %+v", updatedDoc)
+	}
+
+	unchangedConsumer, err := store.LoadToken(consumerRes.Account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(unchangedConsumer, consumerRaw) {
+		t.Errorf("consumer snapshot mutated during GCP token refresh")
+	}
 }

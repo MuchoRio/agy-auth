@@ -235,13 +235,13 @@ func runningAgyCount() int {
 }
 
 func (a *App) cliSettingsPath() string {
-	if env := os.Getenv("AGY_CLI_SETTINGS_FILE"); env != "" {
+	if a != nil && a.Storage != nil {
+		return a.Storage.SettingsFile()
+	}
+	if env := os.Getenv("AGY_AUTH_AGY_SETTINGS_FILE"); env != "" {
 		return env
 	}
-	if a != nil && a.Storage != nil && a.Storage.FilePath != "" {
-		return filepath.Join(filepath.Dir(a.Storage.FilePath), "settings.json")
-	}
-	return ""
+	return os.Getenv("AGY_CLI_SETTINGS_FILE")
 }
 
 func (a *App) detectCLIModelOverride() string {

@@ -31,19 +31,22 @@ var (
 // unavailable. agy-auth mirrors writes to both locations so switching works in
 // desktop and headless environments.
 type Storage struct {
-	Service   string
-	User      string
-	FilePath  string
-	NoKeyring bool
-	Backup    *backup.Store
+	Service      string
+	User         string
+	FilePath     string
+	SettingsPath string
+	NoKeyring    bool
+	Backup       *backup.Store
 }
 
 func DefaultStorage() *Storage {
+	tokenFile := defaultTokenFilePath()
 	return &Storage{
-		Service:   KeyringService,
-		User:      KeyringUser,
-		FilePath:  defaultTokenFilePath(),
-		NoKeyring: os.Getenv("AGY_AUTH_STORAGE") == "file",
+		Service:      KeyringService,
+		User:         KeyringUser,
+		FilePath:     tokenFile,
+		SettingsPath: defaultSettingsFilePath(tokenFile),
+		NoKeyring:    os.Getenv("AGY_AUTH_STORAGE") == "file",
 	}
 }
 
@@ -223,6 +226,17 @@ func (s *Storage) deleteKeyring() error {
 		return ErrNoCredentials
 	}
 	return err
+}
+
+func (s *Storage) SettingsFile() string {
+	if s.SettingsPath != "" {
+		return s.SettingsPath
+	}
+	return defaultSettingsFilePath(s.FilePath)
+}
+
+func (s *Storage) SyncSettings(authMethod, projectID, region string) error {
+	return SyncSettings(s.SettingsFile(), authMethod, projectID, region)
 }
 
 func (s *Storage) readFile() ([]byte, error) {

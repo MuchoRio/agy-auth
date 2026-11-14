@@ -47,6 +47,8 @@ type Account struct {
 	Subject     string    `json:"sub,omitempty"`
 	Alias       string    `json:"alias,omitempty"`
 	AuthMethod  string    `json:"auth_method,omitempty"`
+	ProjectID   string    `json:"project_id,omitempty"`
+	Region      string    `json:"region,omitempty"`
 	Fingerprint string    `json:"fingerprint,omitempty"`
 	HasCli      bool      `json:"has_cli,omitempty"`
 	HasDesktop  bool      `json:"has_desktop,omitempty"`
@@ -55,16 +57,19 @@ type Account struct {
 }
 
 func (a Account) DisplayName() string {
+	base := a.ID
 	switch {
 	case a.Alias != "" && a.Email != "":
-		return a.Alias + " (" + a.Email + ")"
+		base = a.Alias + " (" + a.Email + ")"
 	case a.Email != "":
-		return a.Email
+		base = a.Email
 	case a.Alias != "":
-		return a.Alias
-	default:
-		return a.ID
+		base = a.Alias
 	}
+	if a.ProjectID != "" {
+		return base + " [" + a.ProjectID + "]"
+	}
+	return base
 }
 
 type Config struct {
@@ -658,13 +663,18 @@ func AccountFromRaw(raw []byte) (Account, error) {
 		return Account{}, err
 	}
 	claims, _ := tf.Claims()
+	email := tf.Email()
 	fingerprint := tf.Fingerprint()
+	projectID := strings.TrimSpace(tf.ProjectID)
+	region := strings.TrimSpace(tf.Region)
 	now := time.Now().UTC()
 	return Account{
-		ID:          accountID(claims.Subject, fingerprint),
-		Email:       claims.Email,
+		ID:          accountIDFor(claims.Subject, fingerprint, tf.AuthMethod, projectID),
+		Email:       email,
 		Subject:     claims.Subject,
 		AuthMethod:  tf.AuthMethod,
+		ProjectID:   projectID,
+		Region:      region,
 		Fingerprint: fingerprint,
 		HasCli:      true,
 		AddedAt:     now,
@@ -680,8 +690,11 @@ func (s *Store) Upsert(raw []byte, alias string, activate bool) (UpsertResult, e
 		return UpsertResult{}, err
 	}
 	claims, _ := tf.Claims()
+	email := tf.Email()
 	fingerprint := tf.Fingerprint()
-	id := accountID(claims.Subject, fingerprint)
+	projectID := strings.TrimSpace(tf.ProjectID)
+	region := strings.TrimSpace(tf.Region)
+	id := accountIDFor(claims.Subject, fingerprint, tf.AuthMethod, projectID)
 	if alias != "" {
 		if err := ValidateAlias(alias); err != nil {
 			return UpsertResult{}, err
@@ -696,7 +709,7 @@ func (s *Store) Upsert(raw []byte, alias string, activate bool) (UpsertResult, e
 		}
 		previousActive := reg.Active
 
-		index := findAccountIndex(reg, id, claims.Subject, fingerprint)
+		index := findAccountIndex(reg, id, claims.Subject, fingerprint, tf.AuthMethod, projectID)
 		now := time.Now().UTC()
 		created := index < 0
 		if created {
@@ -720,14 +733,20 @@ func (s *Store) Upsert(raw []byte, alias string, activate bool) (UpsertResult, e
 			}
 			account.Alias = strings.TrimSpace(alias)
 		}
-		if claims.Email != "" {
-			account.Email = claims.Email
+		if email != "" {
+			account.Email = email
 		}
 		if claims.Subject != "" {
 			account.Subject = claims.Subject
 		}
 		if tf.AuthMethod != "" {
 			account.AuthMethod = tf.AuthMethod
+		}
+		if projectID != "" || tf.AuthMethod == agy.AuthMethodGCP {
+			account.ProjectID = projectID
+		}
+		if region != "" || tf.AuthMethod == agy.AuthMethodGCP {
+			account.Region = region
 		}
 		if fingerprint != "" {
 			account.Fingerprint = fingerprint
@@ -773,26 +792,34 @@ func (r *Registry) Match(raw []byte) (*Account, error) {
 		return nil, err
 	}
 	claims, _ := tf.Claims()
+	email := tf.Email()
 	fingerprint := tf.Fingerprint()
+	projectID := strings.TrimSpace(tf.ProjectID)
+	id := accountIDFor(claims.Subject, fingerprint, tf.AuthMethod, projectID)
 
+	for i := range r.Accounts {
+		if r.Accounts[i].ID == id {
+			return &r.Accounts[i], nil
+		}
+	}
 	if claims.Subject != "" {
 		for i := range r.Accounts {
-			if r.Accounts[i].Subject == claims.Subject {
+			if r.Accounts[i].Subject == claims.Subject && r.Accounts[i].SameScope(tf.AuthMethod, projectID) {
 				return &r.Accounts[i], nil
 			}
 		}
 	}
 	if fingerprint != "" {
 		for i := range r.Accounts {
-			if r.Accounts[i].Fingerprint == fingerprint {
+			if r.Accounts[i].Fingerprint == fingerprint && r.Accounts[i].SameScope(tf.AuthMethod, projectID) {
 				return &r.Accounts[i], nil
 			}
 		}
 	}
-	if claims.Email != "" {
+	if email != "" {
 		var match *Account
 		for i := range r.Accounts {
-			if strings.EqualFold(r.Accounts[i].Email, claims.Email) {
+			if strings.EqualFold(r.Accounts[i].Email, email) && r.Accounts[i].SameScope(tf.AuthMethod, projectID) {
 				if match != nil {
 					return nil, nil
 				}
@@ -802,6 +829,21 @@ func (r *Registry) Match(raw []byte) (*Account, error) {
 		return match, nil
 	}
 	return nil, nil
+}
+
+// SameScope reports whether the account matches authMethod and projectID.
+// Consumer and GCP profiles are always distinct, and GCP profiles only match
+// the same case-insensitive project ID.
+func (a Account) SameScope(authMethod, projectID string) bool {
+	incomingGCP := strings.EqualFold(strings.TrimSpace(authMethod), agy.AuthMethodGCP) || strings.TrimSpace(projectID) != ""
+	accountGCP := strings.EqualFold(strings.TrimSpace(a.AuthMethod), agy.AuthMethodGCP) || strings.TrimSpace(a.ProjectID) != ""
+	if incomingGCP != accountGCP {
+		return false
+	}
+	if incomingGCP {
+		return strings.EqualFold(strings.TrimSpace(a.ProjectID), strings.TrimSpace(projectID))
+	}
+	return true
 }
 
 func (r *Registry) ActiveAccount() *Account {
@@ -854,8 +896,8 @@ func (r *Registry) FindByID(id string) *Account {
 }
 
 // Resolve supports row numbers (1-based), exact account IDs, exact aliases,
-// exact emails, account ID prefixes, and email/alias/ID substrings. Earlier
-// forms win, so an exact alias is not widened by a substring match elsewhere.
+// exact project IDs, exact emails, account ID prefixes, and email/alias/project/ID substrings.
+// Earlier forms win, so an exact alias is not widened by a substring match elsewhere.
 // Results preserve registry order.
 func (r *Registry) Resolve(query string) []Account {
 	query = strings.TrimSpace(query)
@@ -879,6 +921,16 @@ func (r *Registry) Resolve(query string) []Account {
 		if account.Alias != "" && strings.EqualFold(account.Alias, query) {
 			return []Account{account}
 		}
+	}
+
+	var exactProject []Account
+	for _, account := range r.Accounts {
+		if account.ProjectID != "" && strings.EqualFold(account.ProjectID, query) {
+			exactProject = append(exactProject, account)
+		}
+	}
+	if len(exactProject) > 0 {
+		return dedupe(exactProject)
 	}
 
 	var exactEmail []Account
@@ -906,6 +958,7 @@ func (r *Registry) Resolve(query string) []Account {
 	for _, account := range r.Accounts {
 		if strings.Contains(strings.ToLower(account.Email), lower) ||
 			strings.Contains(strings.ToLower(account.Alias), lower) ||
+			strings.Contains(strings.ToLower(account.ProjectID), lower) ||
 			strings.Contains(strings.ToLower(account.ID), lower) {
 			partial = append(partial, account)
 		}
@@ -982,6 +1035,10 @@ func ValidateAlias(alias string) error {
 }
 
 func accountID(subject, fingerprint string) string {
+	return accountIDFor(subject, fingerprint, "", "")
+}
+
+func accountIDFor(subject, fingerprint, authMethod, projectID string) string {
 	key := subject
 	if key == "" {
 		key = fingerprint
@@ -989,23 +1046,26 @@ func accountID(subject, fingerprint string) string {
 	if key == "" {
 		key = time.Now().String()
 	}
+	if strings.EqualFold(strings.TrimSpace(authMethod), agy.AuthMethodGCP) && strings.TrimSpace(projectID) != "" {
+		key += ":gcp:" + strings.ToLower(strings.TrimSpace(projectID))
+	}
 	sum := sha256.Sum256([]byte(key))
 	return "acct_" + hex.EncodeToString(sum[:])[:10]
 }
 
-func findAccountIndex(reg *Registry, id, subject, fingerprint string) int {
-	for i := range reg.Accounts {
-		if subject != "" && reg.Accounts[i].Subject == subject {
-			return i
-		}
-	}
-	for i := range reg.Accounts {
-		if fingerprint != "" && reg.Accounts[i].Fingerprint == fingerprint {
-			return i
-		}
-	}
+func findAccountIndex(reg *Registry, id, subject, fingerprint, authMethod, projectID string) int {
 	for i := range reg.Accounts {
 		if reg.Accounts[i].ID == id {
+			return i
+		}
+	}
+	for i := range reg.Accounts {
+		if subject != "" && reg.Accounts[i].Subject == subject && reg.Accounts[i].SameScope(authMethod, projectID) {
+			return i
+		}
+	}
+	for i := range reg.Accounts {
+		if fingerprint != "" && reg.Accounts[i].Fingerprint == fingerprint && reg.Accounts[i].SameScope(authMethod, projectID) {
 			return i
 		}
 	}

@@ -18,7 +18,7 @@ import (
 	"golang.org/x/term"
 )
 
-var Version = "0.4.2"
+var Version = "0.5.0"
 
 type App struct {
 	In               io.Reader
@@ -62,20 +62,7 @@ func New() (*App, error) {
 	deskMgr.SetCodec(store.Vault)
 	usageClient := usage.NewClient(Version)
 	usageClient.OnTokenRefresh = func(token *agy.TokenFile) {
-		if token == nil {
-			return
-		}
-		raw, err := oauth.MarshalTokenFile(*token)
-		if err != nil {
-			return
-		}
-		reg, err := store.Load()
-		if err != nil {
-			return
-		}
-		if matched, err := reg.Match(raw); err == nil && matched != nil {
-			_ = store.SaveToken(matched.ID, raw)
-		}
+		persistRefreshedToken(store, token)
 	}
 	updateURL := defaultUpdateURL
 	if custom := os.Getenv("AGY_AUTH_UPDATE_URL"); custom != "" {
@@ -104,6 +91,23 @@ func New() (*App, error) {
 		StdoutFile:       os.Stdout,
 		StderrFile:       os.Stderr,
 	}, nil
+}
+
+func persistRefreshedToken(store *registry.Store, token *agy.TokenFile) {
+	if store == nil || token == nil {
+		return
+	}
+	raw, err := oauth.MarshalTokenFile(*token)
+	if err != nil {
+		return
+	}
+	reg, err := store.Load()
+	if err != nil {
+		return
+	}
+	if matched, err := reg.Match(raw); err == nil && matched != nil {
+		_ = store.SaveToken(matched.ID, raw)
+	}
 }
 
 func (a *App) Run(args []string) int {
