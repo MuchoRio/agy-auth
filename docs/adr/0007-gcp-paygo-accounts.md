@@ -4,7 +4,7 @@
 - **Date:** 2026-11-14
 - **Decision makers:** Repository maintainers (adapted from upstream `fikrilal/agy-auth` v0.5.0)
 - **Consulted:** Antigravity CLI (`agy`) binary contract (`codeassistclient.StoredToken`, `keyringAuth.TryAuth`, `CLIAuthProvider.ResolveAuthMode`)
-- **Related:** [Execution plan](../exec-plans/active/2026-11-14_upstream-0.5.0-gcp-paygo.md), [Internals](../internals.md)
+- **Related:** [Execution plan](../exec-plans/completed/2026-11-14_upstream-0.5.0-gcp-paygo.md), [Internals](../internals.md)
 
 ## Context
 
@@ -57,6 +57,6 @@ Note: Upstream numbered this decision `ADR-0005`; this fork assigns `ADR-0007` b
 
 ## Links
 
-- [Execution plan](../exec-plans/active/2026-11-14_upstream-0.5.0-gcp-paygo.md)
+- [Execution plan](../exec-plans/completed/2026-11-14_upstream-0.5.0-gcp-paygo.md)
 - [Internals](../internals.md)
 
