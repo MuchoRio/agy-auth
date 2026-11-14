@@ -140,9 +140,6 @@ type Client struct {
 	Now            func() time.Time
 	RefreshToken   func(ctx context.Context, refreshToken string) (string, time.Time, error)
 	OnTokenRefresh func(token *agy.TokenFile)
-
-	ensureOnce sync.Once
-	ensureErr  error
 }
 
 func NewClient(version string) *Client {
@@ -186,12 +183,12 @@ func (c *Client) Fetch(ctx context.Context, _ string, token *agy.TokenFile) (Sna
 	if err != nil {
 		return Snapshot{}, err
 	}
-	project, assist, err := c.loadCodeAssist(ctx, accessToken)
+	project, assist, err := c.loadCodeAssist(ctx, accessToken, token)
 	if err != nil {
 		return Snapshot{}, err
 	}
 
-	snapshot := Snapshot{Plan: planLabel(assist), UpdatedAt: c.now().UTC()}
+	snapshot := Snapshot{Plan: planLabelForToken(assist, token), UpdatedAt: c.now().UTC()}
 	var summary quotaSummaryResponse
 	status, err := c.post(ctx, "retrieveUserQuotaSummary", quotaSummaryRequest{Project: project}, accessToken, &summary)
 	if err != nil {
@@ -209,15 +206,16 @@ func (c *Client) FetchFull(ctx context.Context, _ string, token *agy.TokenFile) 
 	if err != nil {
 		return Full{}, err
 	}
-	project, assist, err := c.loadCodeAssist(ctx, accessToken)
+	project, assist, err := c.loadCodeAssist(ctx, accessToken, token)
 	if err != nil {
 		return Full{}, err
 	}
 
 	now := c.now().UTC()
+	plan := planLabelForToken(assist, token)
 	full := Full{
-		Snapshot: Snapshot{Plan: planLabel(assist), UpdatedAt: now},
-		Detail:   Detail{Plan: planLabel(assist), Buckets: []Model{}, UpdatedAt: now},
+		Snapshot: Snapshot{Plan: plan, UpdatedAt: now},
+		Detail:   Detail{Plan: plan, Buckets: []Model{}, UpdatedAt: now},
 		Groups:   Groups{Groups: []Group{}, UpdatedAt: now},
 	}
 	var summary quotaSummaryResponse
@@ -245,6 +243,9 @@ func (c *Client) FetchFull(ctx context.Context, _ string, token *agy.TokenFile) 
 		}
 	default:
 		full.Detail = detailFromQuota(assist, quota, now)
+		if full.Detail.Plan == "" {
+			full.Detail.Plan = plan
+		}
 	}
 	return full, nil
 }
@@ -301,8 +302,14 @@ func (c *Client) accessToken(ctx context.Context, token *agy.TokenFile) (string,
 	return accessToken, nil
 }
 
-func (c *Client) loadCodeAssist(ctx context.Context, accessToken string) (string, codeAssistResponse, error) {
-	project := strings.TrimSpace(c.ProjectID)
+func (c *Client) loadCodeAssist(ctx context.Context, accessToken string, token *agy.TokenFile) (string, codeAssistResponse, error) {
+	project := ""
+	if token != nil {
+		project = strings.TrimSpace(token.ProjectID)
+	}
+	if project == "" {
+		project = strings.TrimSpace(c.ProjectID)
+	}
 	if project == "" {
 		project = FallbackProjectID
 	}
@@ -380,13 +387,7 @@ func (c *Client) refresh(ctx context.Context, token *agy.TokenFile) (string, tim
 		return accessToken, expiry, nil
 	}
 
-	c.ensureOnce.Do(func() {
-		c.ensureErr = oauth.EnsureClient("")
-	})
-	if c.ensureErr != nil {
-		return "", time.Time{}, fmt.Errorf("%w: %v", ErrRefresh, c.ensureErr)
-	}
-	response, err := oauth.Refresh(ctx, refreshToken)
+	response, err := oauth.RefreshForMethod(ctx, refreshToken, token.AuthMethod)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("%w: %v", ErrRefresh, err)
 	}
@@ -756,6 +757,21 @@ func parseReset(value string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+func planLabelForToken(response codeAssistResponse, token *agy.TokenFile) string {
+	isGCP := token != nil && strings.EqualFold(strings.TrimSpace(token.AuthMethod), agy.AuthMethodGCP) && strings.TrimSpace(token.ProjectID) != ""
+	label := planLabel(response)
+	if isGCP {
+		if label != "" && !strings.EqualFold(label, "Free") {
+			return label
+		}
+		return "PayGo"
+	}
+	if label != "" {
+		return label
+	}
+	return ""
 }
 
 func planLabel(response codeAssistResponse) string {

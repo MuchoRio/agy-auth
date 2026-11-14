@@ -41,7 +41,7 @@ Before replacing or deleting the live credential or Desktop profile, `agy-auth` 
 
 ## Queries and tables
 
-Queries resolve in this order: row number, exact account ID, exact alias, exact email, account ID prefix, then email/alias/ID substring. An ambiguous query opens a candidate picker in a terminal; non-interactive and `--json` calls return `ambiguous_query` with candidates. `switch -` selects the account that was active before the last switch.
+Queries resolve in this order: row number, exact account ID, exact alias, exact GCP project ID, exact email, account ID prefix, then email/alias/ID/project substring. An ambiguous query opens a candidate picker in a terminal; non-interactive and `--json` calls return `ambiguous_query` with candidates. `switch -` selects the account that was active before the last switch.
 
 Rows are ordered active first, then email. The same `01`-style numbers are used by `list`, pickers, and numeric queries. Same-email accounts share a dim header and only the indented child rows are numbered. Tables adapt to terminal width, truncating the account column and dropping lower-priority columns.
 
@@ -61,7 +61,7 @@ Account tables show `PLAN`, `5H`, `WEEKLY`, `GROUP`, `5H RESET`, and `WEEKLY RES
 
 `agy-auth login` uses the same public OAuth client that Antigravity CLI uses. The client ID and secret are discovered from your installed `agy` binary at runtime; this repository does not embed them. If discovery fails, set `AGY_AUTH_CLIENT_ID` and `AGY_AUTH_CLIENT_SECRET`, or use `--via-agy`. The command prints an authorization URL (and opens a browser when possible), then asks for the authorization code shown at `antigravity.google/oauth-callback`.
 
-The flow uses PKCE (`S256`), `access_type=offline`, and `prompt=consent` so Google returns a refresh token. The account is added and activated without deleting the current credential first.
+The flow uses PKCE (`S256`), `access_type=offline`, and `prompt=consent` so Google returns a refresh token. The account is added and activated without deleting the current credential first. For Google Cloud project (**Pay As You Go**) accounts, pass `--gcp --project <project-id> [--region global|us|eu]` (or run `agy-auth login --gcp` interactively to be prompted for the project ID and region); the same flags work with `agy-auth add` (except `--target=desktop`) and `agy-auth import`.
 
 If you prefer to let `agy` handle sign-in:
 
@@ -171,8 +171,11 @@ Usage errors print `error:`, the command's `Usage:` block, and a `hint:` on stde
 | `AGY_AUTH_HOME` | Override the registry directory |
 | `AGY_AUTH_STORAGE=file` | Disable keyring access and use only the file backend |
 | `AGY_AUTH_AGY_TOKEN_FILE` | Override the agy fallback token path |
-| `AGY_AUTH_CLIENT_ID` | Override the OAuth client ID |
-| `AGY_AUTH_CLIENT_SECRET` | Override the OAuth client secret |
+| `AGY_AUTH_AGY_SETTINGS_FILE` | Override the agy `settings.json` path (falls back to `AGY_CLI_SETTINGS_FILE`) |
+| `AGY_AUTH_CLIENT_ID` | Override the consumer OAuth client ID |
+| `AGY_AUTH_CLIENT_SECRET` | Override the consumer OAuth client secret |
+| `AGY_AUTH_GCP_CLIENT_ID` | Override the GCP OAuth client ID |
+| `AGY_AUTH_GCP_CLIENT_SECRET` | Override the GCP OAuth client secret |
 | `AGY_AUTH_PROJECT_ID` | Override the Code Assist project ID used for quota lookups |
 | `AGY_AUTH_NO_UPDATE_CHECK=1` | Disable automatic update checks |
 
@@ -182,7 +185,7 @@ Usage errors print `error:`, the command's `Usage:` block, and a `hint:` on stde
 - `agy-auth` is unofficial and can break when Antigravity changes its credential format or OAuth client.
 - Plan and quota display depend on undocumented Code Assist endpoints. If an endpoint or project context changes, the command reports a stable quota error or unavailable row instead of failing the account list; `--no-usage` skips the lookup.
 - Per-model IDs are provider-specific and may change when Antigravity updates its catalog.
-- The direct OAuth flow targets personal Google accounts (`auth_method: consumer`). For enterprise or custom sign-in flows, sign in with `agy` first and use `agy-auth add`.
+- The direct OAuth flow supports personal Google accounts (`auth_method: consumer`) and Google Cloud project Pay As You Go accounts (`auth_method: gcp` with `--gcp --project <id> --region <global|us|eu>`). For advanced Workforce Identity Federation (SSO) flows, sign in with `agy` first and use `agy-auth add`.
 - Account snapshots and active-credential backups are encrypted with a local key file, not with your OS login keyring. Protect `encryption.key` and back it up separately; losing it makes the snapshots unrecoverable.
 - Exported credential files are intentionally plaintext. Delete them after use.
 - The keyring is protected by your OS login keyring. On Linux, a locked or unresponsive keyring falls back to the file mirror after a short timeout.

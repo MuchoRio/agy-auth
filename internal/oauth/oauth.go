@@ -26,19 +26,25 @@ import (
 // repository does not embed the client ID or secret; they are discovered from
 // agy at login time and can be overridden with environment variables.
 const (
-	antigravityClientIDHash     = "bf00c418024ba6bf606ccdc37120976e41bc429dd1d46ecf16a729aa532626ea"
-	antigravityClientSecretHash = "1d2f041093fd95aa8995a038c711d50a7960da09a505381c09a745d6ad0ecc60"
-	clientIDSuffix              = ".apps.googleusercontent.com"
-	clientSecretPrefix          = "GOCSPX-"
-	discoveryCarry              = 128
-	minClientIDLength           = 40
-	minClientSecretLength       = 20
+	antigravityClientIDHash        = "bf00c418024ba6bf606ccdc37120976e41bc429dd1d46ecf16a729aa532626ea"
+	antigravityClientSecretHash    = "1d2f041093fd95aa8995a038c711d50a7960da09a505381c09a745d6ad0ecc60"
+	antigravityClientSecretHashV2  = "23d89fc5fbce73ed5b9e0cf0ca786bd0eb1bcdff8f65d03dc022d299ad2234b6"
+	antigravityGCPClientIDHash     = "69dee430c4e956f6b672b99a846566d6a86814999fc3b3b050697c0d65ea80c3"
+	antigravityGCPClientSecretHash = "a2ddedc84850a9c48b7e01d61700848083bf0e10fb8d6c99c496803e8b48ced0"
+	clientIDSuffix                 = ".apps.googleusercontent.com"
+	clientSecretPrefix             = "GOCSPX-"
+	discoveryCarry                 = 128
+	minClientIDLength              = 40
+	minClientSecretLength          = 20
+	discoveryChunkBytes            = 4 << 20
 )
 
 var (
-	clientMu     sync.Mutex
-	ClientID     = os.Getenv("AGY_AUTH_CLIENT_ID")
-	ClientSecret = os.Getenv("AGY_AUTH_CLIENT_SECRET")
+	clientMu        sync.RWMutex
+	ClientID        = os.Getenv("AGY_AUTH_CLIENT_ID")
+	ClientSecret    = os.Getenv("AGY_AUTH_CLIENT_SECRET")
+	GCPClientID     = os.Getenv("AGY_AUTH_GCP_CLIENT_ID")
+	GCPClientSecret = os.Getenv("AGY_AUTH_GCP_CLIENT_SECRET")
 )
 
 const (
@@ -50,6 +56,11 @@ const (
 		"https://www.googleapis.com/auth/cclog " +
 		"https://www.googleapis.com/auth/experimentsandconfigs " +
 		"https://www.googleapis.com/auth/aicode openid"
+	GCPScopes = "https://www.googleapis.com/auth/cloud-platform " +
+		"https://www.googleapis.com/auth/userinfo.email " +
+		"https://www.googleapis.com/auth/userinfo.profile " +
+		"https://www.googleapis.com/auth/cclog " +
+		"https://www.googleapis.com/auth/experimentsandconfigs openid"
 )
 
 var TokenEndpoint = "https://oauth2.googleapis.com/token"
@@ -81,17 +92,53 @@ func Challenge(verifier string) string {
 }
 
 func AuthURL(state, verifier string) string {
+	return AuthURLForMethod(state, verifier, agy.AuthMethodConsumer)
+}
+
+func AuthURLForMethod(state, verifier, authMethod string) string {
+	scopes := DefaultScopes
+	isGCP := strings.EqualFold(strings.TrimSpace(authMethod), agy.AuthMethodGCP)
+	if isGCP {
+		scopes = GCPScopes
+	}
+	clientMu.RLock()
+	clientID := ClientID
+	if isGCP {
+		if GCPClientID != "" && GCPClientSecret != "" {
+			clientID = GCPClientID
+		} else {
+			clientID = ""
+		}
+	}
+	clientMu.RUnlock()
+
 	params := url.Values{}
 	params.Set("access_type", "offline")
-	params.Set("client_id", ClientID)
+	params.Set("client_id", clientID)
 	params.Set("code_challenge", Challenge(verifier))
 	params.Set("code_challenge_method", "S256")
 	params.Set("prompt", "consent")
 	params.Set("redirect_uri", RedirectURI)
 	params.Set("response_type", "code")
-	params.Set("scope", DefaultScopes)
+	params.Set("scope", scopes)
 	params.Set("state", state)
 	return AuthEndpoint + "?" + params.Encode()
+}
+
+// ClientCredentialsForMethod returns the client ID and secret corresponding to the given auth method.
+func ClientCredentialsForMethod(authMethod string) (string, string, error) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if strings.EqualFold(strings.TrimSpace(authMethod), agy.AuthMethodGCP) {
+		if GCPClientID != "" && GCPClientSecret != "" {
+			return GCPClientID, GCPClientSecret, nil
+		}
+		return "", "", errors.New("GCP OAuth client credentials are not configured")
+	}
+	if ClientID != "" && ClientSecret != "" {
+		return ClientID, ClientSecret, nil
+	}
+	return "", "", errors.New("OAuth client credentials are not configured")
 }
 
 // NormalizeCode accepts either the bare authorization code shown by
@@ -142,12 +189,20 @@ func NormalizeCode(input, expectedState string) (string, error) {
 }
 
 func Exchange(ctx context.Context, code, verifier string) (*TokenResponse, error) {
-	if ClientID == "" || ClientSecret == "" {
+	return ExchangeForMethod(ctx, code, verifier, agy.AuthMethodConsumer)
+}
+
+func ExchangeForMethod(ctx context.Context, code, verifier, authMethod string) (*TokenResponse, error) {
+	cid, secret, err := ClientCredentialsForMethod(authMethod)
+	if err != nil {
+		if strings.EqualFold(strings.TrimSpace(authMethod), agy.AuthMethodGCP) {
+			return nil, errors.New("GCP OAuth client credentials are not configured; set AGY_AUTH_GCP_CLIENT_ID and AGY_AUTH_GCP_CLIENT_SECRET, or use --via-agy")
+		}
 		return nil, errors.New("OAuth client credentials are not configured; set AGY_AUTH_CLIENT_ID and AGY_AUTH_CLIENT_SECRET, or use --via-agy")
 	}
 	form := url.Values{}
-	form.Set("client_id", ClientID)
-	form.Set("client_secret", ClientSecret)
+	form.Set("client_id", cid)
+	form.Set("client_secret", secret)
 	form.Set("code", code)
 	form.Set("code_verifier", verifier)
 	form.Set("grant_type", "authorization_code")
@@ -159,17 +214,25 @@ func Exchange(ctx context.Context, code, verifier string) (*TokenResponse, error
 // Refresh exchanges a stored refresh token for a new access token. The caller
 // keeps the returned values in memory; agy remains the credential owner.
 func Refresh(ctx context.Context, refreshToken string) (*TokenResponse, error) {
+	return RefreshForMethod(ctx, refreshToken, agy.AuthMethodConsumer)
+}
+
+func RefreshForMethod(ctx context.Context, refreshToken, authMethod string) (*TokenResponse, error) {
 	if strings.TrimSpace(refreshToken) == "" {
 		return nil, errors.New("refresh token is empty")
 	}
-	if ClientID == "" || ClientSecret == "" {
-		if err := EnsureClient(""); err != nil {
-			return nil, err
+	if _, _, err := ClientCredentialsForMethod(authMethod); err != nil {
+		if ensureErr := EnsureClientForMethod("", authMethod); ensureErr != nil {
+			return nil, ensureErr
 		}
 	}
+	cid, secret, err := ClientCredentialsForMethod(authMethod)
+	if err != nil {
+		return nil, err
+	}
 	form := url.Values{}
-	form.Set("client_id", ClientID)
-	form.Set("client_secret", ClientSecret)
+	form.Set("client_id", cid)
+	form.Set("client_secret", secret)
 	form.Set("refresh_token", refreshToken)
 	form.Set("grant_type", "refresh_token")
 
@@ -229,6 +292,10 @@ func TokenFromResponse(response *TokenResponse, authMethod string, now time.Time
 	if expiresIn <= 0 {
 		expiresIn = 3600
 	}
+	var idTokenEmail string
+	if claims, err := agy.ParseIDToken(response.IDToken); err == nil {
+		idTokenEmail = strings.TrimSpace(claims.Email)
+	}
 	return agy.TokenFile{
 		Token: agy.Token{
 			AccessToken:  response.AccessToken,
@@ -236,8 +303,9 @@ func TokenFromResponse(response *TokenResponse, authMethod string, now time.Time
 			RefreshToken: response.RefreshToken,
 			Expiry:       now.Add(time.Duration(expiresIn) * time.Second).Format(time.RFC3339Nano),
 		},
-		AuthMethod: authMethod,
-		IDToken:    response.IDToken,
+		AuthMethod:   authMethod,
+		IDToken:      response.IDToken,
+		IDTokenEmail: idTokenEmail,
 	}
 }
 
@@ -257,74 +325,106 @@ func randomURLSafe(size int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// EnsureClient fills in ClientID and ClientSecret from the environment or from
-// the installed agy binary. agy must already be installed to use this tool, so
-// reading its embedded OAuth client avoids shipping the credential pair here.
+// EnsureClient fills in consumer (and when available, GCP) OAuth client
+// credentials from the environment or from the installed agy binary. agy must
+// already be installed to use this tool, so reading its embedded OAuth client
+// avoids shipping the credential pair here.
 func EnsureClient(agyPath string) error {
+	return ensureClient(agyPath, agy.AuthMethodConsumer, false)
+}
+
+// EnsureClientForMethod ensures OAuth client credentials for authMethod are
+// available from environment overrides or the installed agy binary.
+func EnsureClientForMethod(agyPath, authMethod string) error {
+	return ensureClient(agyPath, authMethod, true)
+}
+
+func ensureClient(agyPath, authMethod string, requireTarget bool) error {
+	isGCP := strings.EqualFold(strings.TrimSpace(authMethod), agy.AuthMethodGCP)
 	clientMu.Lock()
 	defer clientMu.Unlock()
-	if ClientID != "" && ClientSecret != "" {
+
+	needConsumer := ClientID == "" || ClientSecret == ""
+	needGCP := GCPClientID == "" || GCPClientSecret == ""
+	needTarget := needConsumer
+	if isGCP {
+		needTarget = needGCP
+	}
+	if requireTarget && !needTarget {
 		return nil
 	}
+	if !requireTarget && !needConsumer && !needGCP {
+		return nil
+	}
+
 	path := agyPath
 	if path == "" {
 		found, err := exec.LookPath("agy")
 		if err != nil {
+			if !needTarget {
+				return nil
+			}
+			if isGCP {
+				return errors.New("agy executable not found; set AGY_AUTH_GCP_CLIENT_ID and AGY_AUTH_GCP_CLIENT_SECRET, or use --via-agy")
+			}
 			return errors.New("agy executable not found; set AGY_AUTH_CLIENT_ID and AGY_AUTH_CLIENT_SECRET, or use --via-agy")
 		}
 		path = found
 	}
 	file, err := os.Open(path)
 	if err != nil {
+		if !needTarget {
+			return nil
+		}
 		return fmt.Errorf("open agy binary: %w", err)
 	}
 	defer file.Close()
 
-	discoveredID, discoveredSecret, err := discoverClient(file, antigravityClientIDHash, antigravityClientSecretHash)
+	wantConsumerScan := needConsumer && (!requireTarget || !isGCP)
+	wantGCPScan := needGCP && (!requireTarget || isGCP)
+	discClientID, discClientSecret, discGCPID, discGCPSecret, err := discoverClientsFor(file, wantConsumerScan, wantGCPScan)
 	if err != nil {
+		if !needTarget {
+			return nil
+		}
 		return fmt.Errorf("discover the Antigravity OAuth client from %s: %w", path, err)
 	}
-	if ClientID == "" {
-		ClientID = discoveredID
+	if ClientID == "" && discClientID != "" {
+		ClientID = discClientID
 	}
-	if ClientSecret == "" {
-		ClientSecret = discoveredSecret
+	if ClientSecret == "" && discClientSecret != "" {
+		ClientSecret = discClientSecret
+	}
+	if GCPClientID == "" && discGCPID != "" {
+		GCPClientID = discGCPID
+	}
+	if GCPClientSecret == "" && discGCPSecret != "" {
+		GCPClientSecret = discGCPSecret
+	}
+	if isGCP && (GCPClientID == "" || GCPClientSecret == "") {
+		return fmt.Errorf("discover the Antigravity GCP OAuth client from %s: GCP OAuth client credentials not found", path)
+	}
+	if !isGCP && (ClientID == "" || ClientSecret == "") {
+		return fmt.Errorf("discover the Antigravity OAuth client from %s: Antigravity OAuth client credentials not found", path)
 	}
 	return nil
 }
 
-func discoverClient(reader io.Reader, wantedIDHash, wantedSecretHash string) (string, string, error) {
-	ids := make(map[string]bool)
-	secrets := make(map[string]bool)
-	buf := make([]byte, 4<<20)
+func scanCandidates(reader io.Reader, stopWhen func(ids, secrets map[string]bool) bool) (ids, secrets map[string]bool, err error) {
+	ids = make(map[string]bool)
+	secrets = make(map[string]bool)
+	buf := make([]byte, discoveryChunkBytes)
 	carry := make([]byte, 0, discoveryCarry)
-	var clientID, clientSecret string
 
 	for {
-		n, err := reader.Read(buf)
+		n, readErr := reader.Read(buf)
 		if n > 0 {
 			chunk := make([]byte, 0, len(carry)+n)
 			chunk = append(chunk, carry...)
 			chunk = append(chunk, buf[:n]...)
 			collectCandidates(chunk, ids, secrets)
-			if clientID == "" {
-				for candidate := range ids {
-					if hashString(candidate) == wantedIDHash {
-						clientID = candidate
-						break
-					}
-				}
-			}
-			if clientSecret == "" {
-				for candidate := range secrets {
-					if hashString(candidate) == wantedSecretHash {
-						clientSecret = candidate
-						break
-					}
-				}
-			}
-			if clientID != "" && clientSecret != "" {
-				return clientID, clientSecret, nil
+			if stopWhen != nil && stopWhen(ids, secrets) {
+				return ids, secrets, nil
 			}
 			if len(chunk) > discoveryCarry {
 				carry = append(carry[:0], chunk[len(chunk)-discoveryCarry:]...)
@@ -332,21 +432,83 @@ func discoverClient(reader io.Reader, wantedIDHash, wantedSecretHash string) (st
 				carry = append(carry[:0], chunk...)
 			}
 		}
-		if err == io.EOF {
-			break
+		if readErr == io.EOF {
+			return ids, secrets, nil
 		}
-		if err != nil {
-			return "", "", err
+		if readErr != nil {
+			return nil, nil, readErr
 		}
 	}
+}
 
-	if clientID == "" {
-		return "", "", errors.New("Antigravity OAuth client ID not found")
+func discoverClients(reader io.Reader) (clientID, clientSecret, gcpID, gcpSecret string, err error) {
+	return discoverClientsFor(reader, true, true)
+}
+
+func discoverClientsFor(reader io.Reader, wantConsumer, wantGCP bool) (clientID, clientSecret, gcpID, gcpSecret string, err error) {
+	stopWhen := func(ids, secrets map[string]bool) bool {
+		if wantConsumer {
+			cid, csec := findMatchingPair(ids, secrets, antigravityClientIDHash, antigravityClientSecretHash, antigravityClientSecretHashV2)
+			if cid == "" || csec == "" {
+				return false
+			}
+		}
+		if wantGCP {
+			gid, gsec := findMatchingPair(ids, secrets, antigravityGCPClientIDHash, antigravityGCPClientSecretHash)
+			if gid == "" || gsec == "" {
+				return false
+			}
+		}
+		return wantConsumer || wantGCP
 	}
-	if clientSecret == "" {
-		return "", "", errors.New("Antigravity OAuth client secret not found")
+	ids, secrets, err := scanCandidates(reader, stopWhen)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	clientID, clientSecret = findMatchingPair(ids, secrets, antigravityClientIDHash, antigravityClientSecretHash, antigravityClientSecretHashV2)
+	gcpID, gcpSecret = findMatchingPair(ids, secrets, antigravityGCPClientIDHash, antigravityGCPClientSecretHash)
+	return clientID, clientSecret, gcpID, gcpSecret, nil
+}
+
+func discoverClient(reader io.Reader, wantedIDHash string, wantedSecretHashes ...string) (string, string, error) {
+	ids, secrets, err := scanCandidates(reader, func(ids, secrets map[string]bool) bool {
+		cid, csec := findMatchingPair(ids, secrets, wantedIDHash, wantedSecretHashes...)
+		return cid != "" && csec != ""
+	})
+	if err != nil {
+		return "", "", err
+	}
+	clientID, clientSecret := findMatchingPair(ids, secrets, wantedIDHash, wantedSecretHashes...)
+	if clientID == "" || clientSecret == "" {
+		return "", "", errors.New("Antigravity OAuth client ID or secret not found")
 	}
 	return clientID, clientSecret, nil
+}
+
+func findMatchingPair(ids, secrets map[string]bool, wantedIDHash string, wantedSecretHashes ...string) (string, string) {
+	var clientID, clientSecret string
+	for candidate := range ids {
+		if hashString(candidate) == wantedIDHash {
+			clientID = candidate
+			break
+		}
+	}
+	for candidate := range secrets {
+		candidateHash := hashString(candidate)
+		for _, wantedSecretHash := range wantedSecretHashes {
+			if candidateHash == wantedSecretHash {
+				clientSecret = candidate
+				break
+			}
+		}
+		if clientSecret != "" {
+			break
+		}
+	}
+	if clientID == "" || clientSecret == "" {
+		return "", ""
+	}
+	return clientID, clientSecret
 }
 
 func collectCandidates(chunk []byte, ids, secrets map[string]bool) {

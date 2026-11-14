@@ -1,15 +1,20 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/fikrilal/agy-auth/internal/agy"
 )
 
 func TestChallengeRFCVector(t *testing.T) {
@@ -63,6 +68,18 @@ func TestAuthURLParameters(t *testing.T) {
 	}
 	if !strings.Contains(query.Get("scope"), "auth/aicode") {
 		t.Errorf("scope = %q", query.Get("scope"))
+	}
+
+	gcpParsed, err := url.Parse(AuthURLForMethod(state, verifier, agy.AuthMethodGCP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcpScope := gcpParsed.Query().Get("scope")
+	if strings.Contains(gcpScope, "auth/aicode") {
+		t.Errorf("gcp scope should not contain auth/aicode: %q", gcpScope)
+	}
+	if !strings.Contains(gcpScope, "auth/cloud-platform") {
+		t.Errorf("gcp scope missing cloud-platform: %q", gcpScope)
 	}
 }
 
@@ -278,5 +295,117 @@ func TestDiscoverClient(t *testing.T) {
 	}
 	if _, _, err := discoverClient(strings.NewReader(data), hashString(id), hashString("missing")); err == nil {
 		t.Error("expected missing client secret error")
+	}
+}
+
+func TestDiscoverClientAcross4MiBChunkBoundary(t *testing.T) {
+	id := "boundary-client-abcdefghijklmnopqrstuvwxyz012345" + ".apps.googleusercontent.com"
+	secret := "GOCSPX-" + "boundary_secret-456"
+	payload := append(bytes.Repeat([]byte{'x'}, discoveryChunkBytes-12), []byte(id+" "+secret+" tail")...)
+
+	gotID, gotSecret, err := discoverClient(bytes.NewReader(payload), hashString(id), hashString(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotID != id || gotSecret != secret {
+		t.Errorf("discoverClient across boundary = %q, %q", gotID, gotSecret)
+	}
+}
+
+func TestClientCredentialsForMethod(t *testing.T) {
+	setTestClient(t)
+	oldGCPID, oldGCPSecret := GCPClientID, GCPClientSecret
+	GCPClientID, GCPClientSecret = "gcp-client", "gcp-secret"
+	defer func() {
+		GCPClientID, GCPClientSecret = oldGCPID, oldGCPSecret
+	}()
+
+	cid, sec, err := ClientCredentialsForMethod(agy.AuthMethodConsumer)
+	if err != nil || cid != "test-client" || sec != "test-secret" {
+		t.Errorf("Consumer credentials = %q, %q, %v", cid, sec, err)
+	}
+
+	cid, sec, err = ClientCredentialsForMethod(agy.AuthMethodGCP)
+	if err != nil || cid != "gcp-client" || sec != "gcp-secret" {
+		t.Errorf("GCP credentials = %q, %q, %v", cid, sec, err)
+	}
+}
+
+func TestGCPOAuthCredentialsStrictnessAndNoFallback(t *testing.T) {
+	setTestClient(t)
+	oldGCPID, oldGCPSecret := GCPClientID, GCPClientSecret
+	t.Cleanup(func() {
+		GCPClientID, GCPClientSecret = oldGCPID, oldGCPSecret
+	})
+
+	// Missing GCP credentials must not fall back to consumer credentials.
+	GCPClientID, GCPClientSecret = "", ""
+	if _, _, err := ClientCredentialsForMethod(agy.AuthMethodGCP); err == nil {
+		t.Fatal("expected error when GCP credentials are empty")
+	}
+	if parsed, err := url.Parse(AuthURLForMethod("s", "v", agy.AuthMethodGCP)); err != nil || parsed.Query().Get("client_id") != "" {
+		t.Errorf("AuthURLForMethod with empty GCP creds client_id = %q, err = %v", parsed.Query().Get("client_id"), err)
+	}
+
+	// Partial GCP credentials (ID without secret) must also be rejected cleanly.
+	GCPClientID, GCPClientSecret = "partial-gcp-id", ""
+	if _, _, err := ClientCredentialsForMethod(agy.AuthMethodGCP); err == nil {
+		t.Fatal("expected error when GCPClientSecret is empty")
+	}
+	if parsed, err := url.Parse(AuthURLForMethod("s", "v", agy.AuthMethodGCP)); err != nil || parsed.Query().Get("client_id") != "" {
+		t.Errorf("AuthURLForMethod must ignore partial GCPClientID, got client_id=%q", parsed.Query().Get("client_id"))
+	}
+
+	// Complete GCP credentials are used only when both ID and secret are present.
+	GCPClientID, GCPClientSecret = "gcp-client", "gcp-secret"
+	if parsed, err := url.Parse(AuthURLForMethod("s", "v", agy.AuthMethodGCP)); err != nil || parsed.Query().Get("client_id") != "gcp-client" {
+		t.Errorf("AuthURLForMethod client_id = %q, want gcp-client", parsed.Query().Get("client_id"))
+	}
+
+	// EnsureClientForMethod(gcp) must fail when only consumer creds are set and agy binary lacks GCP creds.
+	GCPClientID, GCPClientSecret = "", ""
+	dummyAgy := filepath.Join(t.TempDir(), "agy")
+	if err := os.WriteFile(dummyAgy, []byte("no oauth client here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureClientForMethod(dummyAgy, agy.AuthMethodGCP); err == nil {
+		t.Fatal("expected EnsureClientForMethod(gcp) to fail when binary has no GCP credentials")
+	}
+
+	// findMatchingPair is all-or-nothing when secret or ID is absent.
+	ids := map[string]bool{"test-client-id": true}
+	secrets := map[string]bool{}
+	if gotID, gotSecret := findMatchingPair(ids, secrets, hashString("test-client-id"), hashString("missing-secret")); gotID != "" || gotSecret != "" {
+		t.Errorf("expected empty pair when secret is missing, got (%q, %q)", gotID, gotSecret)
+	}
+}
+
+func TestRefreshForMethodNoCrossClientFallback(t *testing.T) {
+	setTestClient(t)
+	oldGCPID, oldGCPSecret := GCPClientID, GCPClientSecret
+	GCPClientID, GCPClientSecret = "gcp-client", "gcp-secret"
+	t.Cleanup(func() {
+		GCPClientID, GCPClientSecret = oldGCPID, oldGCPSecret
+	})
+
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		writer.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"error": "invalid_grant"})
+	}))
+	defer server.Close()
+
+	oldEndpoint, oldClient := TokenEndpoint, HTTPClient
+	TokenEndpoint, HTTPClient = server.URL, server.Client()
+	t.Cleanup(func() {
+		TokenEndpoint, HTTPClient = oldEndpoint, oldClient
+	})
+
+	if _, err := RefreshForMethod(context.Background(), "refresh-token", agy.AuthMethodGCP); err == nil {
+		t.Fatal("expected refresh error")
+	}
+	if calls != 1 {
+		t.Errorf("expected single refresh attempt without cross-client fallback, got %d requests", calls)
 	}
 }

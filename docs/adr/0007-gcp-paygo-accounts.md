@@ -1,0 +1,62 @@
+# ADR-0007: Support Google Cloud Project (Pay As You Go) Accounts
+
+- **Status:** Accepted
+- **Date:** 2026-11-14
+- **Decision makers:** Repository maintainers (adapted from upstream `fikrilal/agy-auth` v0.5.0)
+- **Consulted:** Antigravity CLI (`agy`) binary contract (`codeassistclient.StoredToken`, `keyringAuth.TryAuth`, `CLIAuthProvider.ResolveAuthMode`)
+- **Related:** [Execution plan](../exec-plans/active/2026-11-14_upstream-0.5.0-gcp-paygo.md), [Internals](../internals.md)
+
+## Context
+
+Users often switch between a personal Google account (`auth_method: "consumer"`) and a work account that authenticates through a Google Cloud project (`auth_method: "gcp"`) using the **Pay As You Go** billing model in `agy`.
+
+Inspection of the `agy` binary (`codeassistclient.StoredToken`, `keyringAuth.TryAuth`, and `CLIAuthProvider.ResolveAuthMode`) establishes the exact credential contract for Google Cloud project accounts:
+
+1. `StoredToken` includes `auth_method`, `id_token`, `id_token_email`, `project_id`, `region`, `user_tier`, `tier_display_name`, `wif_provider`, `saved_wif_provider`, and `writer_id`.
+2. When `auth_method` is `"gcp"`, `keyringAuth.TryAuth` rejects the stored token as incomplete onboarding if both `user_tier` and `project_id` are empty.
+3. When `auth_method` is `"gcp"`, `user_tier` is empty (`""`), `project_id` is set to the user's Google Cloud project ID (for example `my-sample-gcp-project`), and `region` is set to `"global"`, `"us"`, or `"eu"`, `CLIAuthProvider.ResolveAuthMode` resolves to `"business_agent_platform_paygo"` (Pay As You Go).
+4. Newer `agy` releases also store `id_token_email` alongside or instead of `id_token`, and may rotate the embedded OAuth client secret across `agy` versions.
+
+Previously, `agy-auth` only wrote `auth_method: "consumer"` (without `project_id` or `region`) during `agy-auth login`, did not fall back to `id_token_email` when `id_token` was absent, and derived account IDs solely from `(sub, fingerprint)`, preventing the same Google user from storing both a personal consumer profile and a GCP project profile (or multiple GCP projects) as separate switchable accounts. Additionally, `MuchoRio/agy-auth` preserves unknown top-level credential fields via `TokenFile.Extra`, syncs Desktop profiles, and checks `~/.gemini/antigravity-cli/settings.json` for pinned `"model"` overrides.
+
+Note: Upstream numbered this decision `ADR-0005`; this fork assigns `ADR-0007` because `ADR-0005` and `ADR-0006` are already assigned to per-account CLI `installation_id` and Desktop `.updaterId`.
+
+## Decision drivers
+
+- Allow users to log in, add, import, list, status-check, switch, and rotate between personal (`consumer`) accounts and Google Cloud project (`gcp` Pay As You Go) accounts without re-running `agy`'s multi-step onboarding wizard.
+- Preserve 100% backward compatibility with existing `consumer` snapshots, encrypted vaults, unknown credential fields, `AGY_CLI_SETTINGS_FILE` model-override detection, and Desktop profile safeguards.
+- Support storing both a `consumer` profile and one or more `gcp` project profiles even when they share the same Google `sub` claim.
+- Never embed OAuth client IDs or client secrets in the repository; only store SHA-256 fingerprints for binary discovery.
+
+## Considered options
+
+- **Option A: Require `--via-agy` for all GCP logins** — Rejected because `--via-agy` requires an interactive terminal, spawns `agy` in an isolated directory, and forces the user through 6 TUI screens. Direct OAuth login with `--gcp --project <id> [--region global|us|eu]` (or interactive prompts when `--gcp` is passed on a TTY) is faster, scriptable, and works headless.
+- **Option B: Support first-class GCP Pay As You Go flags (`--gcp`, `--project`, `--region`) across `login`, `add`, and `import`, and synchronize CLI `settings.json`** — Accepted.
+- **Option C: Overwrite the existing account entry when the same Google `sub` logs in with a GCP project** — Rejected because many developers use the same Google identity for both consumer and GCP project profiles, or across multiple GCP projects. Scoping GCP account IDs by `(sub/fingerprint, "gcp", project_id)` while keeping consumer account IDs unchanged allows side-by-side profiles.
+
+## Decision
+
+1. Extend `agy.TokenFile` with `StoredToken` fields (`id_token_email`, `project_id`, `region`, `user_tier`, `tier_display_name`, `wif_provider`, `saved_wif_provider`, `writer_id`) while preserving unknown JSON keys cleanly through `TokenFile.Extra`, and define constants for `AuthMethod` (`consumer`, `gcp`) and GCP regions (`global`, `us`, `eu`).
+2. Fall back to `id_token_email` in `TokenFile.Email()` when `id_token` is absent or has no email claim, and populate `id_token_email` when constructing credentials from OAuth responses.
+3. Add `--gcp`, `--project <id>`, and `--region <global|us|eu>` flags to `agy-auth login` (plus validation of `--auth-method`), `add` (rejecting `--gcp`/`--project`/`--region` when `--target desktop` is used alone), and single-file `import`.
+4. Synchronize CLI `settings.json` (`gcp.project` and `gcp.location`) on active GCP CLI writes and remove `"gcp"` on switching/rotating to a `consumer` CLI credential or running `remove --logout`, unifying `AGY_AUTH_AGY_SETTINGS_FILE` and `AGY_CLI_SETTINGS_FILE` behind `Storage.SettingsFile()`.
+5. Use `agy`'s GCP OAuth scope set when logging in with `auth_method == "gcp"`, and discover both legacy/rotated consumer and GCP OAuth client SHA-256 fingerprints using chunked 4 MiB scanning with targeted early exit.
+6. Persist `project_id` and `region` on `registry.Account`, scope GCP account IDs and matching (`SameScope`) by project ID across `Match`, `Upsert`, `existingStoredToken`, and `import --purge`, and allow `Resolve` to match by `project_id`.
+
+## Consequences
+
+- **Good:** Users can add, switch, and rotate between personal (`consumer`) and work (`gcp` Pay As You Go) accounts in a single command (`agy-auth switch work` or `agy-auth switch <project-id>`).
+- **Good:** Unknown credential fields, encrypted vault snapshots, and Desktop safeguards stay intact.
+- **Neutral:** Existing consumer account IDs and snapshots remain unchanged.
+
+## Confirmation
+
+- Contract fixture `harness/fixtures/credential.gcp.json` verified by `internal/harness/contracts`.
+- Unit and CLI integration tests in `internal/agy`, `internal/oauth`, `internal/registry`, `internal/usage`, and `internal/cli`.
+- `make verify-full` (`go run ./cmd/harness verify --profile full`) in CI / Go 1.24 toolchain environment.
+
+## Links
+
+- [Execution plan](../exec-plans/active/2026-11-14_upstream-0.5.0-gcp-paygo.md)
+- [Internals](../internals.md)
+

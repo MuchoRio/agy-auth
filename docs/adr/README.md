@@ -29,6 +29,7 @@ Use the next number. Statuses: `Proposed`, `Accepted`, `Superseded`, `Deprecated
 | [0004](0004-antigravity-ide-hub-and-user-scope-sync.md) | Accepted | Support Antigravity IDE, user scope synchronization, and background hub daemon termination |
 | [0005](0005-per-account-installation-id.md) | Accepted | Keep a CLI installation id per account next to its stored snapshot |
 | [0006](0006-per-account-desktop-updater-id.md) | Accepted | Keep a Desktop updater id per account inside its stored profile |
+| [0007](0007-gcp-paygo-accounts.md) | Accepted | Support Google Cloud Project (Pay As You Go) accounts alongside consumer accounts |
 
 ## Template
 

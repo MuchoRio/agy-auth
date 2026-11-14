@@ -1,6 +1,7 @@
 package agy
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,14 +12,30 @@ import (
 	"time"
 )
 
+const (
+	AuthMethodConsumer = "consumer"
+	AuthMethodGCP      = "gcp"
+	RegionGlobal       = "global"
+	RegionUS           = "us"
+	RegionEU           = "eu"
+)
+
 // TokenFile mirrors the JSON document Antigravity CLI stores in the OS keyring
 // (service "gemini", account "antigravity") and in the file fallback at
 // ~/.gemini/antigravity-cli/antigravity-oauth-token.
 type TokenFile struct {
-	Token      Token                      `json:"token"`
-	AuthMethod string                     `json:"auth_method"`
-	IDToken    string                     `json:"id_token"`
-	Extra      map[string]json.RawMessage `json:"-"`
+	Token            Token                      `json:"token"`
+	AuthMethod       string                     `json:"auth_method"`
+	IDToken          string                     `json:"id_token,omitempty"`
+	IDTokenEmail     string                     `json:"id_token_email,omitempty"`
+	WIFProvider      string                     `json:"wif_provider,omitempty"`
+	SavedWIFProvider string                     `json:"saved_wif_provider,omitempty"`
+	ProjectID        string                     `json:"project_id,omitempty"`
+	Region           string                     `json:"region,omitempty"`
+	UserTier         string                     `json:"user_tier,omitempty"`
+	TierDisplayName  string                     `json:"tier_display_name,omitempty"`
+	WriterID         string                     `json:"writer_id,omitempty"`
+	Extra            map[string]json.RawMessage `json:"-"`
 }
 
 type Token struct {
@@ -30,9 +47,17 @@ type Token struct {
 }
 
 type tokenFileAlias struct {
-	Token      Token  `json:"token"`
-	AuthMethod string `json:"auth_method"`
-	IDToken    string `json:"id_token"`
+	Token            Token  `json:"token"`
+	AuthMethod       string `json:"auth_method"`
+	IDToken          string `json:"id_token,omitempty"`
+	IDTokenEmail     string `json:"id_token_email,omitempty"`
+	WIFProvider      string `json:"wif_provider,omitempty"`
+	SavedWIFProvider string `json:"saved_wif_provider,omitempty"`
+	ProjectID        string `json:"project_id,omitempty"`
+	Region           string `json:"region,omitempty"`
+	UserTier         string `json:"user_tier,omitempty"`
+	TierDisplayName  string `json:"tier_display_name,omitempty"`
+	WriterID         string `json:"writer_id,omitempty"`
 }
 
 type tokenAlias struct {
@@ -40,6 +65,20 @@ type tokenAlias struct {
 	TokenType    string `json:"token_type"`
 	RefreshToken string `json:"refresh_token"`
 	Expiry       string `json:"expiry"`
+}
+
+var knownTokenFileKeys = []string{
+	"token",
+	"auth_method",
+	"id_token",
+	"id_token_email",
+	"wif_provider",
+	"saved_wif_provider",
+	"project_id",
+	"region",
+	"user_tier",
+	"tier_display_name",
+	"writer_id",
 }
 
 func (t *TokenFile) UnmarshalJSON(data []byte) error {
@@ -51,35 +90,66 @@ func (t *TokenFile) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &rawMap); err != nil {
 		return err
 	}
-	delete(rawMap, "token")
-	delete(rawMap, "auth_method")
-	delete(rawMap, "id_token")
+	for _, key := range knownTokenFileKeys {
+		delete(rawMap, key)
+	}
 	if len(rawMap) == 0 {
 		rawMap = nil
 	}
 	t.Token = base.Token
 	t.AuthMethod = base.AuthMethod
 	t.IDToken = base.IDToken
+	t.IDTokenEmail = base.IDTokenEmail
+	t.WIFProvider = base.WIFProvider
+	t.SavedWIFProvider = base.SavedWIFProvider
+	t.ProjectID = base.ProjectID
+	t.Region = base.Region
+	t.UserTier = base.UserTier
+	t.TierDisplayName = base.TierDisplayName
+	t.WriterID = base.WriterID
 	t.Extra = rawMap
 	return nil
 }
 
 func (t TokenFile) MarshalJSON() ([]byte, error) {
-	if len(t.Extra) == 0 {
-		return json.Marshal(tokenFileAlias{
-			Token:      t.Token,
-			AuthMethod: t.AuthMethod,
-			IDToken:    t.IDToken,
-		})
+	alias := tokenFileAlias{
+		Token:            t.Token,
+		AuthMethod:       t.AuthMethod,
+		IDToken:          t.IDToken,
+		IDTokenEmail:     t.IDTokenEmail,
+		WIFProvider:      t.WIFProvider,
+		SavedWIFProvider: t.SavedWIFProvider,
+		ProjectID:        t.ProjectID,
+		Region:           t.Region,
+		UserTier:         t.UserTier,
+		TierDisplayName:  t.TierDisplayName,
+		WriterID:         t.WriterID,
 	}
-	merged := make(map[string]any, len(t.Extra)+3)
+	if len(t.Extra) == 0 {
+		return json.Marshal(alias)
+	}
+	merged := make(map[string]any, len(t.Extra)+len(knownTokenFileKeys))
 	for k, v := range t.Extra {
 		merged[k] = v
 	}
 	merged["token"] = t.Token
 	merged["auth_method"] = t.AuthMethod
-	merged["id_token"] = t.IDToken
+	setIfNotEmpty(merged, "id_token", t.IDToken)
+	setIfNotEmpty(merged, "id_token_email", t.IDTokenEmail)
+	setIfNotEmpty(merged, "wif_provider", t.WIFProvider)
+	setIfNotEmpty(merged, "saved_wif_provider", t.SavedWIFProvider)
+	setIfNotEmpty(merged, "project_id", t.ProjectID)
+	setIfNotEmpty(merged, "region", t.Region)
+	setIfNotEmpty(merged, "user_tier", t.UserTier)
+	setIfNotEmpty(merged, "tier_display_name", t.TierDisplayName)
+	setIfNotEmpty(merged, "writer_id", t.WriterID)
 	return json.Marshal(merged)
+}
+
+func setIfNotEmpty(doc map[string]any, key, value string) {
+	if value != "" {
+		doc[key] = value
+	}
 }
 
 func (t *Token) UnmarshalJSON(data []byte) error {
@@ -154,12 +224,84 @@ func ParseTokenFile(raw []byte) (*TokenFile, error) {
 	return &tf, nil
 }
 
-func (t *TokenFile) Email() string {
-	claims, err := t.Claims()
-	if err != nil {
-		return ""
+func ValidateProjectID(projectID string) (string, error) {
+	trimmed := strings.TrimSpace(projectID)
+	if trimmed == "" {
+		return "", errors.New("project ID cannot be empty")
 	}
-	return claims.Email
+	if strings.ContainsAny(trimmed, " \t\r\n/") {
+		return "", errors.New("project ID cannot contain whitespace or slashes")
+	}
+	return trimmed, nil
+}
+
+func ValidateRegion(region string) (string, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(region))
+	if trimmed == "" {
+		return RegionGlobal, nil
+	}
+	switch trimmed {
+	case RegionGlobal, RegionUS, RegionEU:
+		return trimmed, nil
+	default:
+		return "", fmt.Errorf("invalid region %q; supported regions: global, us, eu", region)
+	}
+}
+
+// WithGCPOptions returns a copy of raw with auth_method, project_id, and region
+// set while preserving any unknown top-level fields and numeric precision.
+func WithGCPOptions(raw []byte, authMethod, projectID, region string) ([]byte, error) {
+	tf, err := ParseTokenFile(raw)
+	if err != nil {
+		return nil, err
+	}
+	var doc map[string]any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("invalid credential JSON: %w", err)
+	}
+	if doc == nil {
+		doc = make(map[string]any)
+	}
+	if trimmedAuth := strings.TrimSpace(authMethod); trimmedAuth != "" {
+		doc["auth_method"] = trimmedAuth
+		if trimmedAuth == AuthMethodGCP {
+			delete(doc, "user_tier")
+			delete(doc, "tier_display_name")
+		}
+	}
+	if strings.TrimSpace(projectID) != "" {
+		validatedProject, err := ValidateProjectID(projectID)
+		if err != nil {
+			return nil, err
+		}
+		doc["project_id"] = validatedProject
+	}
+	if strings.TrimSpace(region) != "" {
+		validatedRegion, err := ValidateRegion(region)
+		if err != nil {
+			return nil, err
+		}
+		doc["region"] = validatedRegion
+	}
+	if email := tf.Email(); email != "" {
+		if existing, ok := doc["id_token_email"].(string); !ok || strings.TrimSpace(existing) == "" {
+			doc["id_token_email"] = email
+		}
+	}
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode credential JSON: %w", err)
+	}
+	return append(encoded, '\n'), nil
+}
+
+func (t *TokenFile) Email() string {
+	if claims, err := t.Claims(); err == nil && strings.TrimSpace(claims.Email) != "" {
+		return strings.TrimSpace(claims.Email)
+	}
+	return strings.TrimSpace(t.IDTokenEmail)
 }
 
 func (t *TokenFile) Subject() string {
