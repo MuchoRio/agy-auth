@@ -172,4 +172,3 @@ func TestSettingsFileEnvPrecedence(t *testing.T) {
 		t.Fatalf("explicit SettingsPath = %q, want %q", got, explicit)
 	}
 }
-

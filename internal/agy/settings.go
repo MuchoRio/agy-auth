@@ -95,4 +95,3 @@ func SyncSettings(settingsPath string, authMethod, projectID, region string) err
 	}
 	return nil
 }
-
