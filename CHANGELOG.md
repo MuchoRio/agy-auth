@@ -4,6 +4,20 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-14
+
+### Changed
+
+- Unified CLI settings path resolution behind `Storage.SettingsFile()` (`AGY_AUTH_AGY_SETTINGS_FILE` with fallback to `AGY_CLI_SETTINGS_FILE`) as single source of truth across status warnings, switch checks, and GCP settings synchronization.
+- Optimized OAuth binary discovery (`internal/oauth`) with 4 MiB chunked scanning and targeted early exit once required Consumer/GCP client credentials are located.
+- Switched `WithGCPOptions` and `SyncSettings` JSON decoding to `json.NewDecoder.UseNumber()` to preserve large numeric fields inside unknown `settings.json` / `TokenFile.Extra` properties without float64 precision loss.
+
+### Fixed
+
+- Added explicit `--target=desktop` guardrail in `agy-auth add` rejecting `--gcp`, `--project`, and `--region` flags so desktop-only adds cannot mutate CLI `settings.json`.
+- Enforced strict `--auth-method` validation (`consumer` or `gcp`) across `login` and `add` flows.
+- Hardened cross-platform test reliability with `runtime.GOOS == "windows"` permission guards and expanded fork regression tests across `internal/agy`, `internal/backup`, `internal/oauth`, `internal/registry`, `internal/usage`, and `internal/cli`.
+
 ## [0.5.0] - 2026-11-14
 
 ### Added
@@ -12,7 +26,6 @@ All notable changes to this project are documented here.
 - Coexisting personal (`consumer`) and per-project (`gcp`) profiles for the same Google identity (`:gcp:<project_id>`), with GCP project/region metadata shown in `list`, `current`, `status`, and query matching by project ID.
 - Automatic `~/.gemini/antigravity-cli/settings.json` synchronization for active GCP projects (`gcp.project` and `gcp.location`) while preserving existing settings and clearing the `gcp` block when switching CLI accounts to `consumer` or logging out.
 - GCP OAuth scope selection, strict GCP client discovery from `agy` (or `AGY_AUTH_GCP_CLIENT_ID` / `AGY_AUTH_GCP_CLIENT_SECRET`), `id_token_email` fallback, and project-scoped Code Assist quota queries.
-- Fork hardening and optimizations: SSOT `SettingsFile()` unifying `AGY_AUTH_AGY_SETTINGS_FILE` and `AGY_CLI_SETTINGS_FILE`, 4 MiB chunked binary discovery with targeted early exit, strict `--auth-method` (`consumer`/`gcp`) validation, `--target=desktop` guard against `--gcp`/`--project`/`--region` CLI mutations, `UseNumber()` JSON precision preservation, and Windows NTFS test guards.
 
 ### Fixed
 
